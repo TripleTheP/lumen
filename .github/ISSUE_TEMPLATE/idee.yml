@@ -1,0 +1,19 @@
+name: Idee vorschlagen
+description: Eine neue Funktion oder Verbesserung
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Was möchtest du erreichen?
+      description: Beschreibe das Ziel, nicht nur die Lösung.
+    validations:
+      required: true
+  - type: textarea
+    id: idee
+    attributes:
+      label: Wie könnte es aussehen?
+  - type: markdown
+    attributes:
+      value: |
+        Lumen soll klein und sparsam bleiben: keine neuen Abhängigkeiten, nichts im Hintergrund, was gerade keiner sieht.

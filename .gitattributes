@@ -1,0 +1,6 @@
+# Einheitliche Zeilenenden (Windows-Checkouts würden sonst CRLF erzeugen)
+* text=auto eol=lf
+
+*.ico binary
+*.zip binary
+*.png binary

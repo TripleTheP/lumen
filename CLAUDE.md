@@ -26,7 +26,8 @@ aber minimaler Ressourcenverbrauch. C++17, Win32, Direct3D 11, keine externen Bi
 - VS Code: `.vscode/` mit Tasks (Strg+Umschalt+B), gdb-Debugging (F5) und IntelliSense für MSYS2 UCRT64 in `C:\msys64`.
   Die Tasks beenden eine laufende Instanz vorher per `taskkill` (WM_CLOSE → sauberes Beenden).
 - Visual Studio: `cmake -B build -A x64` und `cmake --build build --config Release` (CMake/MSVC noch nicht getestet)
-- GitHub Action `.github/workflows/build.yml` baut bei jedem Push
+- GitHub Action `.github/workflows/build.yml` baut bei jedem Push auf `main` und jedem PR; ein Tag `vX.Y.Z` erzeugt ein Release mit der exe
+- Repo-Dateien: `LICENSE` (MIT), `CHANGELOG.md` (bei jeder Änderung unter „Unveröffentlicht" ergänzen), `CONTRIBUTING.md`, `SECURITY.md`, Issue-/PR-Vorlagen in `.github/`
 
 ## Test-Stand (0.1.0)
 Getestet unter Wine (Software-Rendering): Start, alle Shader, Bild, Video inkl. Schleife, Shader-Fehleranzeige, Einzelinstanz/Datei übergeben.

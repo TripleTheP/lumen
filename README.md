@@ -1,7 +1,13 @@
 # Lumen – Live-Hintergründe, die deinen PC in Ruhe lassen
 
+[![Build](https://github.com/TripleTheP/lumen/actions/workflows/build.yml/badge.svg)](https://github.com/TripleTheP/lumen/actions/workflows/build.yml)
+[![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue.svg)](LICENSE)
+![Plattform: Windows](https://img.shields.io/badge/Plattform-Windows-0078D4)
+![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C)
+
 Lumen zeigt **Shader, Videos und Bilder hinter deinen Desktop-Symbolen** – wie Wallpaper Engine, aber so schlank wie Kumo:
-ein einziges Programm (~1,3 MB), kein Browser, kein Konto, keine Telemetrie, keine Adminrechte.
+ein einziges Programm (~1,4 MB), kein Browser, kein Konto, keine Telemetrie, keine Adminrechte.
+Geschrieben in C++17 mit Win32 und Direct3D 11, ganz ohne externe Bibliotheken.
 
 - **Direct3D 11 direkt** – ein Gerät, ein Prozess für alle Bildschirme
 - **Videos per Hardware-Dekodierung** (Media Foundation), Ton wird gar nicht erst dekodiert
@@ -12,9 +18,14 @@ ein einziges Programm (~1,3 MB), kein Browser, kein Konto, keine Telemetrie, kei
 - **Pausiert von selbst**: verdeckter Bildschirm (maximiertes Fenster), Vollbild-Spiel oder -Video (dann alle Bildschirme), Akku/Energiesparen, gesperrter PC, Remote Desktop, Bildschirm aus
 - **Sparsam**: Standbilder werden einmal gezeichnet und danach freigegeben, Shader werden höchstens in 1080p berechnet und hochskaliert (auf 4K ein Viertel der Arbeit), Bildrate 15/30/60/144, Renderauflösung 50–100 %, niedrige CPU- und GPU-Priorität
 
+## Voraussetzungen
+
+- Windows 11 (64 Bit) mit einer Grafikkarte, die Direct3D 11 kann. Getestet auf Windows 11 26H2; Windows 10 sollte laufen, ist aber nicht getestet.
+- Für Videos muss der Codec in Windows vorhanden sein: HEVC braucht die Erweiterung aus dem Microsoft Store, „N"-Editionen das Media Feature Pack.
+
 ## Starten
 
-1. `Lumen.exe` irgendwo hinlegen (z. B. `C:\Programme\Lumen` oder `%LOCALAPPDATA%\Lumen`) und starten.
+1. `Lumen.exe` aus den [Releases](../../releases/latest) laden (oder [selbst bauen](#selbst-bauen)), irgendwo hinlegen (z. B. `C:\Programme\Lumen` oder `%LOCALAPPDATA%\Lumen`) und starten.
 2. Windows-SmartScreen warnt, weil das Programm nicht signiert ist: **Weitere Informationen → Trotzdem ausführen**.
 3. Vorher Wallpaper Engine oder Lively beenden – zwei Hintergrund-Programme stören sich.
 4. **Rechtsklick auf das Lumen-Symbol** in der Taskleiste (ggf. unter `^`) öffnet das Menü.
@@ -133,6 +144,14 @@ Besitzt du Wallpaper Engine, zeigt Lumen deine abonnierten **Video**-Hintergrün
 - **Linux/WSL oder MSYS2 (MinGW-w64):** `make` → `build/Lumen.exe` (unter MSYS2: `make CROSS=`), mit Debug-Symbolen: `make DEBUG=1` → `build/debug/Lumen.exe`, Selbsttest: `make test` (nur unter Windows)
 - **VS Code (MSYS2 in `C:\msys64` mit `mingw-w64-ucrt-x86_64-gcc`, `make`, `mingw-w64-ucrt-x86_64-gdb`):** Strg+Umschalt+B baut, F5 startet den Debugger. Eine laufende Lumen-Instanz wird vorher beendet.
 - **Visual Studio 2022:** `cmake -B build -A x64` und `cmake --build build --config Release`
-- **GitHub:** Die Action in `.github/workflows/build.yml` baut die exe bei jedem Push.
+- **GitHub:** Die Action in `.github/workflows/build.yml` baut die exe bei jedem Push auf `main` und jedem Pull Request. Ein Tag wie `v0.2.0` erzeugt automatisch ein Release mit der exe.
 
 Aufbau: `main.cpp` (Tray, Bildschirme, Schleife, Pause-Logik) · `renderer.cpp` (D3D11, Shader, Bild, Video) · `desktop.cpp` (Einbettung hinter die Symbole, Verdeckung) · `audio.cpp` (Loopback + FFT) · `library.cpp` (Bibliothek, Katalog, Wallpaper Engine) · `examples.cpp` (mitgelieferte Shader).
+
+## Mitmachen
+
+Fehler, Ideen und Pull Requests sind willkommen – siehe [CONTRIBUTING.md](CONTRIBUTING.md). Änderungen stehen im [CHANGELOG](CHANGELOG.md), Hinweise zur Sicherheit in [SECURITY.md](SECURITY.md).
+
+## Lizenz
+
+[MIT](LICENSE) © 2026 TripleTheP
