@@ -1,0 +1,6 @@
+# Lumen Online-Katalog
+# Eine Zeile pro Hintergrund:   Name | https://…/datei | Beschreibung (optional)
+# Erlaubt: .zip (Ordner mit wallpaper.ini), Bilder, Videos, .hlsl  –  nur https://
+#
+# Beispiel für GitHub (DEINNAME/lumen-katalog durch dein Repository ersetzen):
+Lavalampe | https://raw.githubusercontent.com/DEINNAME/lumen-katalog/main/pakete/Lavalampe.zip | Weiche Blasen, reagieren auf Musik und Maus
