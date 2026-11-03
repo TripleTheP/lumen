@@ -2,6 +2,7 @@
 #include "examples.h"
 #include <urlmon.h>
 #include <wininet.h>
+#include <shellapi.h>
 #include <algorithm>
 #include <sstream>
 
@@ -237,7 +238,16 @@ void Library::WriteExamples() {
     std::wstring base = JoinPath(LibraryDir(), L"Beispiele");
     for (auto& ex : Examples()) {
         std::wstring dir = JoinPath(base, ex.folder);
-        if (FileExists(JoinPath(dir, L"wallpaper.ini"))) continue;
+        if (FileExists(JoinPath(dir, L"wallpaper.ini"))) {
+            // Unveränderte Kopie der Vorgängerfassung auffrischen – selbst bearbeitete Beispiele bleiben unangetastet
+            std::wstring sh = JoinPath(dir, L"shader.hlsl");
+            std::string cur;
+            if (ex.replaces && ReadTextFile(sh, cur) && Fnv1a(cur) == ex.replaces) {
+                WriteTextFile(sh, ex.shader);
+                Log(L"Beispiel aktualisiert: %s", ex.folder);
+            }
+            continue;
+        }
         EnsureDir(dir);
         WriteTextFile(JoinPath(dir, L"wallpaper.ini"), ex.ini);
         WriteTextFile(JoinPath(dir, L"shader.hlsl"), ex.shader);
@@ -301,6 +311,17 @@ static std::wstring TempFile(const std::wstring& ext) {
 
 static bool IsHttps(const std::wstring& u) { return ToLower(u.substr(0, 8)) == L"https://"; }
 
+// Ordner samt Inhalt endgültig löschen, ohne Dialoge (std::filesystem würde die exe um ~200 KB vergrößern)
+static void RemoveTree(const std::wstring& dir) {
+    if (!DirExists(dir)) return;
+    std::wstring from = dir + L'\0';   // pFrom muss doppelt nullterminiert sein
+    SHFILEOPSTRUCTW op{};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.c_str();
+    op.fFlags = FOF_NO_UI;
+    SHFileOperationW(&op);
+}
+
 bool FetchCatalog(const std::wstring& url, std::vector<CatalogItem>& out, std::wstring& err) {
     out.clear();
     if (!IsHttps(url)) {
@@ -346,12 +367,17 @@ bool InstallCatalogItem(const CatalogItem& item, std::wstring& installedRel, std
     if (!Download(item.url, tmp, err)) return false;
 
     if (ext == L".zip") {
+        // Erst außerhalb der Bibliothek entpacken (gleiches Laufwerk), dann den alten Stand als Ganzes ersetzen
         std::wstring dest = JoinPath(online, name);
-        EnsureDir(dest);
+        std::wstring work = JoinPath(DirOf(LibraryDir()), L"Download");
+        std::wstring stage = JoinPath(work, name), old = JoinPath(work, name + L".alt");
+        RemoveTree(stage);   // Reste eines abgebrochenen Downloads
+        RemoveTree(old);
+        EnsureDir(stage);
         wchar_t sys[MAX_PATH];
         GetSystemDirectoryW(sys, MAX_PATH);
         std::wstring tar = JoinPath(sys, L"tar.exe");
-        std::wstring cmd = L"\"" + tar + L"\" -xf \"" + tmp + L"\" -C \"" + dest + L"\"";
+        std::wstring cmd = L"\"" + tar + L"\" -xf \"" + tmp + L"\" -C \"" + stage + L"\"";
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
@@ -367,9 +393,24 @@ bool InstallCatalogItem(const CatalogItem& item, std::wstring& installedRel, std
         CloseHandle(pi.hThread);
         DeleteFileW(tmp.c_str());
         if (code != 0) {
+            RemoveTree(stage);
             err = L"Zip-Datei konnte nicht entpackt werden";
             return false;
         }
+        // Umbenennen scheitert, solange etwas darin offen ist (laufendes Video, Explorer) – dann bleibt alles, wie es war
+        if (DirExists(dest) && !MoveFileExW(dest.c_str(), old.c_str(), 0)) {
+            RemoveTree(stage);
+            err = L"Der Ordner wird gerade benutzt (angezeigt oder im Explorer geöffnet). Bitte schließen bzw. einen "
+                  L"anderen Hintergrund wählen und erneut installieren.";
+            return false;
+        }
+        if (!MoveFileExW(stage.c_str(), dest.c_str(), 0)) {
+            if (DirExists(old)) MoveFileExW(old.c_str(), dest.c_str(), 0);
+            RemoveTree(stage);
+            err = L"Entpackte Dateien konnten nicht in die Bibliothek verschoben werden";
+            return false;
+        }
+        RemoveTree(old);
         installedRel = L"Online\\" + name;
         return true;
     }

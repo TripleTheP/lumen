@@ -9,8 +9,8 @@ ein einziges Programm (~1,3 MB), kein Browser, kein Konto, keine Telemetrie, kei
 - **Audio-reaktiv**: 16 Frequenzbänder aus dem, was gerade läuft (WASAPI-Loopback) – der Audio-Thread läuft nur, wenn ein Hintergrund ihn braucht
 - **Bibliothek** mit Gruppen, „Datei hinzufügen", eigene Shader mit Live-Neuladen
 - **Online-Katalog** (selbst hostbar, z. B. auf GitHub) und **Import der Video-Hintergründe aus Wallpaper Engine**
-- **Pausiert von selbst**: verdeckter Bildschirm (Spiel, maximiertes Fenster), Akku/Energiesparen, gesperrter PC, Remote Desktop, Bildschirm aus
-- **Sparsam**: Standbilder werden einmal gezeichnet und danach freigegeben, Bildrate 15/30/60/144, Renderauflösung 50–100 %, niedrige CPU- und GPU-Priorität
+- **Pausiert von selbst**: verdeckter Bildschirm (maximiertes Fenster), Vollbild-Spiel oder -Video (dann alle Bildschirme), Akku/Energiesparen, gesperrter PC, Remote Desktop, Bildschirm aus
+- **Sparsam**: Standbilder werden einmal gezeichnet und danach freigegeben, Shader werden höchstens in 1080p berechnet und hochskaliert (auf 4K ein Viertel der Arbeit), Bildrate 15/30/60/144, Renderauflösung 50–100 %, niedrige CPU- und GPU-Priorität
 
 ## Starten
 
@@ -30,7 +30,7 @@ Zum Beenden: Menü → *Beenden*. Dein normaler Windows-Hintergrund kommt zurüc
 | Eigenen Shader erstellen… | legt eine Vorlage an und öffnet sie im Editor – **speichern genügt**, Lumen lädt neu |
 | Bibliothek öffnen | Explorer im Bibliotheksordner |
 | Online-Bibliothek | Katalog laden, Einträge mit einem Klick installieren |
-| Einstellungen | Bildrate, Renderauflösung, Akku-Pause, Musik-Reaktion, Wallpaper-Engine-Videos, Autostart |
+| Einstellungen | Bildrate, Renderauflösung, Akku-Pause, Vollbild-Pause, Musik-Reaktion, Wallpaper-Engine-Videos, Autostart |
 | Pausieren | alles anhalten |
 
 Tipp: `Lumen.exe "C:\pfad\video.mp4"` (oder „Öffnen mit → Lumen") fügt die Datei hinzu und zeigt sie an.
@@ -68,7 +68,7 @@ float4 mainImage(float2 fragCoord) {
 | Wert | Bedeutung |
 |---|---|
 | `iResolution` | Größe in Pixeln (`float2`) |
-| `iTime`, `iTimeDelta`, `iFrame` | Zeit in Sekunden, Abstand zum letzten Bild, Bildzähler |
+| `iTime`, `iTimeDelta`, `iFrame` | Zeit in Sekunden (beginnt jede Stunde wieder bei 0, damit Animationen auch nach Tagen flüssig bleiben), Abstand zum letzten Bild, Bildzähler |
 | `iMouse` | `xy` Maus in Pixeln (oben links = 0,0), `z` Taste gedrückt, `w` Maus über dem Desktop (1/0) |
 | `iClick` | `xy` letzter Klick auf den Desktop, `z` Sekunden seit dem Klick, `w` Anzahl Klicks |
 | `iAudio` | `x` Bass, `y` Mitten, `z` Höhen, `w` Pegel – alles 0..1 |
@@ -111,8 +111,10 @@ Besitzt du Wallpaper Engine, zeigt Lumen deine abonnierten **Video**-Hintergrün
 |---|---|---|
 | `fps` | 30 | Bildrate-Obergrenze |
 | `render_scale` | 1.0 | 0.25–1.0, Rest skaliert die Grafikkarte kostenlos hoch |
+| `shader_res` | 1080 | Reine Shader höchstens mit so vielen Pixeln wie 1080p berechnen (Bilder und Videos bleiben scharf); `0` = volle Auflösung |
 | `pause_on_battery` | 1 | Pause im Akkubetrieb und Energiesparmodus |
 | `pause_remote` | 1 | Pause bei Remote Desktop |
+| `pause_fullscreen` | 1 | Alle Bildschirme pausieren, solange ein Vollbild-Programm (Spiel, Video) im Vordergrund ist |
 | `audio` | 1 | Audio-Reaktion erlauben |
 | `wallpaper_engine` | 1 | Wallpaper-Engine-Videos anzeigen |
 | `catalog_url` | – | Adresse des Online-Katalogs |
@@ -128,7 +130,8 @@ Besitzt du Wallpaper Engine, zeigt Lumen deine abonnierten **Video**-Hintergrün
 
 ## Selbst bauen
 
-- **Linux/WSL oder MSYS2 (MinGW-w64):** `make` → `build/Lumen.exe` (unter MSYS2: `make CROSS=`)
+- **Linux/WSL oder MSYS2 (MinGW-w64):** `make` → `build/Lumen.exe` (unter MSYS2: `make CROSS=`), mit Debug-Symbolen: `make DEBUG=1` → `build/debug/Lumen.exe`, Selbsttest: `make test` (nur unter Windows)
+- **VS Code (MSYS2 in `C:\msys64` mit `mingw-w64-ucrt-x86_64-gcc`, `make`, `mingw-w64-ucrt-x86_64-gdb`):** Strg+Umschalt+B baut, F5 startet den Debugger. Eine laufende Lumen-Instanz wird vorher beendet.
 - **Visual Studio 2022:** `cmake -B build -A x64` und `cmake --build build --config Release`
 - **GitHub:** Die Action in `.github/workflows/build.yml` baut die exe bei jedem Push.
 

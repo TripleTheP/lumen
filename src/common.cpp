@@ -4,6 +4,12 @@
 #include <cwctype>
 #include <algorithm>
 
+uint64_t Fnv1a(const std::string& s) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
+    return h;
+}
+
 std::wstring Utf8ToWide(const std::string& s) {
     if (s.empty()) return {};
     int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);

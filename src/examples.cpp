@@ -12,38 +12,45 @@ static const char* kAurora = R"HLSL(// Aurora – Nordlichter über Bergen.
 
 float4 mainImage(float2 fragCoord) {
     float2 uv = fragCoord / iResolution.y;          // Seitenverhältnis bleibt erhalten
-    float  w  = iResolution.x / iResolution.y;
     float  t  = iTime * 0.04;
-    float  yN = fragCoord.y / iResolution.y;        // 0 oben, 1 unten
 
-    float3 col = lerp(float3(0.005, 0.01, 0.04), float3(0.01, 0.05, 0.10), yN);
+    // Berge zuerst: Was dahinter liegt, muss gar nicht berechnet werden (Grenzen aus dem Wertebereich von L_fbm)
+    float hill = 2.0, hill2 = 2.0;
+    if (uv.y > 0.73) hill  = 0.80 + 0.07 * (L_fbm(float2(uv.x * 2.2, 3.0)) - 0.5) + 0.03 * sin(uv.x * 1.7);
+    if (uv.y > 0.85) hill2 = 0.88 + 0.05 * (L_fbm(float2(uv.x * 3.1 + 5.0, 9.0)) - 0.5);
 
-    // Sterne
-    float s = L_hash(floor(fragCoord / 2.0));
-    col += step(0.9982, s) * (0.5 + 0.5 * sin(iTime * 2.0 + s * 90.0)) * (1.0 - yN);
+    float3 col = float3(0.004, 0.008, 0.016);
+    if (uv.y < hill + 0.002) {
+        col = lerp(float3(0.005, 0.01, 0.04), float3(0.01, 0.05, 0.10), uv.y);
 
-    float energy = 0.55 + iAudio.x * 1.3 + iAudio.w * 0.4;
+        // Sterne
+        float s = L_hash(floor(fragCoord / 2.0));
+        col += step(0.9982, s) * (0.5 + 0.5 * sin(iTime * 2.0 + s * 90.0)) * (1.0 - uv.y);
 
-    [unroll] for (int k = 0; k < 3; k++) {
-        float fk = k;
-        float ln = 0.30 + 0.09 * fk + 0.14 * L_fbm(float2(uv.x * 1.3 + t * (1.0 + fk * 0.4), fk * 3.7 + t));
-        float d = ln - uv.y;                         // > 0 oberhalb der Linie
-        float curtain = smoothstep(-0.015, 0.0, d) * exp(-max(d, 0.0) * (4.5 - band(k * 2) * 2.0));
-        float rays = 0.55 + 0.45 * L_fbm(float2(uv.x * 14.0 + t * 6.0 + fk * 9.0, uv.y * 1.5));
-        float3 c = lerp(float3(0.1, 1.0, 0.55), float3(0.55, 0.3, 1.0), saturate(fk * 0.4 + 0.3 * sin(t * 4.0 + uv.x * 1.5)));
-        col += c * curtain * rays * 0.33 * energy;
+        float energy = 0.55 + iAudio.x * 1.3 + iAudio.w * 0.4;
+
+        // Die Vorhänge reichen höchstens bis y = 0,63 herab
+        if (uv.y < 0.64) {
+            [unroll] for (int k = 0; k < 3; k++) {
+                float fk = k;
+                float ln = 0.30 + 0.09 * fk + 0.14 * L_fbm(float2(uv.x * 1.3 + t * (1.0 + fk * 0.4), fk * 3.7 + t));
+                float d = ln - uv.y;                     // > 0 oberhalb der Linie
+                if (d > -0.015) {
+                    float curtain = smoothstep(-0.015, 0.0, d) * exp(-max(d, 0.0) * (4.5 - band(k * 2) * 2.0));
+                    float rays = 0.55 + 0.45 * L_fbm(float2(uv.x * 14.0 + t * 6.0 + fk * 9.0, uv.y * 1.5));
+                    float3 c = lerp(float3(0.1, 1.0, 0.55), float3(0.55, 0.3, 1.0), saturate(fk * 0.4 + 0.3 * sin(t * 4.0 + uv.x * 1.5)));
+                    col += c * curtain * rays * 0.33 * energy;
+                }
+            }
+        }
+
+        // Schein unter der Maus
+        if (iMouse.w > 0.5) {
+            float md = length(uv - iMouse.xy / iResolution.y);
+            col += float3(0.3, 0.8, 1.0) * 0.06 / (md * md * 60.0 + 1.0);
+        }
+        col = lerp(col, float3(0.004, 0.008, 0.016), smoothstep(hill - 0.002, hill + 0.002, uv.y));
     }
-
-    // Schein unter der Maus
-    if (iMouse.w > 0.5) {
-        float md = length(uv - iMouse.xy / iResolution.y);
-        col += float3(0.3, 0.8, 1.0) * 0.06 / (md * md * 60.0 + 1.0);
-    }
-
-    // Berge
-    float hill = 0.80 + 0.07 * (L_fbm(float2(uv.x * 2.2, 3.0)) - 0.5) + 0.03 * sin(uv.x * 1.7);
-    col = lerp(col, float3(0.004, 0.008, 0.016), smoothstep(hill - 0.002, hill + 0.002, uv.y));
-    float hill2 = 0.88 + 0.05 * (L_fbm(float2(uv.x * 3.1 + 5.0, 9.0)) - 0.5);
     col = lerp(col, float3(0.0, 0.002, 0.006), smoothstep(hill2 - 0.002, hill2 + 0.002, uv.y));
     return float4(col, 1.0);
 }
@@ -201,7 +208,7 @@ static const char* kTemplate = R"HLSL(// Mein Shader – Vorlage
 // Speichern genügt: Lumen lädt den Shader automatisch neu.
 //
 // Verfügbare Werte (Pixel-Koordinaten, oben links = 0,0):
-//   iResolution  Größe in Pixeln            iTime       Sekunden seit Start
+//   iResolution  Größe in Pixeln            iTime       Sekunden seit Start (0..3600, dann wieder 0)
 //   iMouse       xy Maus, z Taste, w Maus über dem Desktop (1/0)
 //   iClick       xy letzter Klick, z Sekunden seit Klick, w Anzahl Klicks
 //   iAudio       x Bass, y Mitten, z Höhen, w Pegel (0..1)
@@ -248,7 +255,7 @@ Shader-Dateien werden beim Speichern automatisch neu geladen.
 
 const std::vector<ExampleWallpaper>& Examples() {
     static const std::vector<ExampleWallpaper> v = {
-        {L"Aurora", kAuroraIni, kAurora},
+        {L"Aurora", kAuroraIni, kAurora, 0x08B56E4257ADAA2Dull},   // 0.1.0
         {L"Punktfeld", kDotsIni, kDots},
         {L"Spektrum", kSpectrumIni, kSpectrum},
         {L"Tag und Nacht", kDayNightIni, kDayNight},

@@ -1,0 +1,5 @@
+{
+    // Gebaut wird mit dem Makefile; CMake Tools soll beim Öffnen nicht konfigurieren
+    "cmake.configureOnOpen": false,
+    "files.encoding": "utf8"
+}

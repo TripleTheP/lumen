@@ -28,7 +28,7 @@ enum : UINT {
 
 enum : UINT {
     ID_PAUSE = 10, ID_ADDFILE, ID_NEWSHADER, ID_OPENLIB, ID_EXIT, ID_AUTOSTART, ID_BATTERY, ID_AUDIO, ID_WE,
-    ID_OPENCONFIG, ID_CAT_REFRESH, ID_RELOAD, ID_ABOUT,
+    ID_OPENCONFIG, ID_CAT_REFRESH, ID_RELOAD, ID_ABOUT, ID_FULLSCREEN, ID_SHADER_RES,
     ID_FPS_BASE = 100,        // +fps
     ID_SCALE_BASE = 400,      // +Prozent
     ID_CAT_BASE = 1000,       // +Index
@@ -118,6 +118,7 @@ private:
     void SetScreen(size_t i, const std::wstring& id);
     std::shared_ptr<Source> GetSource(const std::wstring& path, bool video, std::wstring& err);
     void ResizeAll();
+    void FitRenderSize(Screen& s);
 
     // Ablauf
     double RenderDue(double now);
@@ -161,7 +162,7 @@ private:
 
     bool running_ = true;
     bool userPaused_ = false, locked_ = false, displayOff_ = false;
-    bool onBattery_ = false, saver_ = false, remote_ = false;
+    bool onBattery_ = false, saver_ = false, remote_ = false, fullscreen_ = false;
     bool recheckSoon_ = false;
     bool prevDown_ = false;
     bool trimmed_ = false;
@@ -401,6 +402,9 @@ LRESULT App::HandleMsg(HWND h, UINT m, WPARAM w, LPARAM l) {
             Shell_NotifyIconW(NIM_DELETE, &nid_);
         }
         return 0;
+    case WM_CLOSE:   // z. B. "taskkill /im Lumen.exe" ohne /F: sauber beenden
+        Quit();
+        return 0;
     }
     return DefWindowProcW(h, m, w, l);
 }
@@ -442,9 +446,8 @@ bool App::CreateScreenWindow(Screen& s) {
                              nullptr, nullptr, inst_, nullptr);
     if (!s.hwnd) return false;
     host_.Place(s.hwnd, r);
-    double scale = cfg_.RenderScale();
-    s.rw = std::max(1, (int)std::lround(w * scale));
-    s.rh = std::max(1, (int)std::lround(h * scale));
+    s.rw = s.rh = 0;
+    FitRenderSize(s);   // noch ohne Swapchain: legt nur die Größe fest
     if (!gfx_.CreateSwapChain(s.hwnd, s.rw, s.rh, cfg_.GetBool(L"legacy_swapchain", false), s.sc, s.rtv)) {
         DestroyWindow(s.hwnd);
         s.hwnd = nullptr;
@@ -469,15 +472,23 @@ void App::DestroyScreenWindow(Screen& s) {
 }
 
 void App::ResizeAll() {
+    for (auto& s : screens_)
+        if (s.sc) FitRenderSize(s);
+}
+
+void App::FitRenderSize(Screen& s) {
+    int w = s.mon.rc.right - s.mon.rc.left, h = s.mon.rc.bottom - s.mon.rc.top;
     double scale = cfg_.RenderScale();
-    for (auto& s : screens_) {
-        if (!s.sc) continue;
-        int w = s.mon.rc.right - s.mon.rc.left, h = s.mon.rc.bottom - s.mon.rc.top;
-        s.rw = std::max(1, (int)std::lround(w * scale));
-        s.rh = std::max(1, (int)std::lround(h * scale));
-        gfx_.ResizeSwapChain(s.sc.Get(), s.rw, s.rh, s.rtv);
-        s.dirty = true;
-    }
+    // Reine Shader sind weich gezeichnet: Über ~1080p sieht man kaum Unterschied, die GPU-Last wächst aber mit jedem Pixel
+    int maxH = cfg_.GetInt(L"shader_res", 1080);
+    if (s.hasWall && s.wp.kind == WallKind::Shader && maxH > 0)
+        scale = std::min(scale, std::sqrt(maxH * maxH * 16.0 / 9.0 / (double(w) * h)));
+    int rw = std::max(1, (int)std::lround(w * scale)), rh = std::max(1, (int)std::lround(h * scale));
+    if (rw == s.rw && rh == s.rh) return;
+    s.rw = rw;
+    s.rh = rh;
+    if (s.sc) gfx_.ResizeSwapChain(s.sc.Get(), rw, rh, s.rtv);
+    s.dirty = true;
 }
 
 std::shared_ptr<Source> App::GetSource(const std::wstring& path, bool video, std::wstring& err) {
@@ -555,6 +566,7 @@ void App::ApplyId(Screen& s, const std::wstring& id) {
         return;
     }
     LoadWallpaper(s, id);
+    FitRenderSize(s);
     UpdateAudioNeed();
 }
 
@@ -592,7 +604,7 @@ void App::RecoverDevice() {
 bool App::GlobalPaused() const {
     bool battery = cfg_.GetBool(L"pause_on_battery", true) && (onBattery_ || saver_);
     bool remote = cfg_.GetBool(L"pause_remote", true) && remote_;
-    return userPaused_ || locked_ || displayOff_ || battery || remote;
+    return userPaused_ || locked_ || displayOff_ || battery || remote || fullscreen_;
 }
 
 double App::RenderDue(double now) {
@@ -657,7 +669,8 @@ void App::RenderScreen(Screen& s, double now, const AudioFrame& af, POINT cur, b
     ShaderConstants c{};
     c.resolution[0] = (float)s.rw;
     c.resolution[1] = (float)s.rh;
-    c.time = (float)std::fmod(now - s.startTime, 86400.0);
+    // float ist bei 86400 s nur noch ~8 ms genau (Animation ruckelt), bei 3600 s ~0,24 ms – dafür ein Sprung pro Stunde
+    c.time = (float)std::fmod(now - s.startTime, 3600.0);
     c.timeDelta = s.lastRender < 0 ? 0.0f : (float)std::min(now - s.lastRender, 1.0);
     double sc = s.rw / double(std::max(1L, s.mon.rc.right - s.mon.rc.left));
     bool onThis = PtInRect(&s.mon.rc, cur) != 0;
@@ -695,6 +708,11 @@ void App::RenderScreen(Screen& s, double now, const AudioFrame& af, POINT cur, b
 //  Regelmäßige Prüfungen (1×/Sekunde)
 // =====================================================================================
 void App::CheckCoverage() {
+    bool fs = cfg_.GetBool(L"pause_fullscreen", true) && IsForegroundFullscreen();
+    if (fs != fullscreen_) {
+        fullscreen_ = fs;
+        if (!fs) for (auto& s : screens_) s.dirty = true;
+    }
     for (auto& s : screens_) {
         if (!s.hwnd) continue;
         bool cov = IsMonitorCovered(s.mon);
@@ -875,9 +893,14 @@ void App::ShowMenu() {
     int curScale = (int)std::lround(cfg_.RenderScale() * 100);
     for (int p : {100, 75, 50})
         AppendMenuW(scl, MF_STRING | (curScale == p ? MF_CHECKED : 0), ID_SCALE_BASE + p, (std::to_wstring(p) + L" %").c_str());
+    AppendMenuW(scl, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(scl, MF_STRING | (cfg_.GetInt(L"shader_res", 1080) > 0 ? MF_CHECKED : 0), ID_SHADER_RES,
+                L"Shader höchstens in 1080p berechnen (spart GPU)");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)scl, L"Renderauflösung");
     AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"pause_on_battery", true) ? MF_CHECKED : 0), ID_BATTERY,
                 L"Im Akkubetrieb und Energiesparmodus pausieren");
+    AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"pause_fullscreen", true) ? MF_CHECKED : 0), ID_FULLSCREEN,
+                L"Bei Vollbild-Programmen alle Bildschirme pausieren");
     AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"audio", true) ? MF_CHECKED : 0), ID_AUDIO, L"Auf Musik reagieren");
     AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"wallpaper_engine", true) ? MF_CHECKED : 0), ID_WE,
                 L"Videos aus Wallpaper Engine anzeigen");
@@ -948,6 +971,16 @@ void App::OnCommand(UINT id) {
     case ID_CAT_REFRESH: RefreshCatalog(); break;
     case ID_OPENCONFIG: OpenConfig(); break;
     case ID_BATTERY: cfg_.SetBool(L"pause_on_battery", !cfg_.GetBool(L"pause_on_battery", true)); cfg_.Save(); break;
+    case ID_SHADER_RES:
+        cfg_.SetInt(L"shader_res", cfg_.GetInt(L"shader_res", 1080) > 0 ? 0 : 1080);
+        cfg_.Save();
+        ResizeAll();
+        break;
+    case ID_FULLSCREEN:
+        cfg_.SetBool(L"pause_fullscreen", !cfg_.GetBool(L"pause_fullscreen", true));
+        cfg_.Save();
+        recheckSoon_ = true;
+        break;
     case ID_AUDIO: cfg_.SetBool(L"audio", !cfg_.GetBool(L"audio", true)); cfg_.Save(); UpdateAudioNeed(); break;
     case ID_WE: cfg_.SetBool(L"wallpaper_engine", !cfg_.GetBool(L"wallpaper_engine", true)); cfg_.Save(); break;
     case ID_AUTOSTART: SetAutostart(!AutostartEnabled()); break;

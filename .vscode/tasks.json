@@ -1,0 +1,75 @@
+{
+    // Bauen mit MSYS2 (UCRT64): C:\msys64, Pakete mingw-w64-ucrt-x86_64-gcc, make, mingw-w64-ucrt-x86_64-gdb
+    "version": "2.0.0",
+    "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "MSYSTEM": "UCRT64", "CHERE_INVOKING": "1" }
+    },
+    "tasks": [
+        {
+            // Laufendes Lumen sperrt die exe und blockiert als Einzelinstanz den Start → erst sauber beenden
+            "label": "Lumen beenden",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": [
+                "-NoProfile", "-Command",
+                "$p = Get-Process Lumen -ErrorAction SilentlyContinue; if ($p) { taskkill /im Lumen.exe | Out-Null; $p | ForEach-Object { if (-not $_.WaitForExit(3000)) { Stop-Process -Id $_.Id -Force } } }"
+            ],
+            "presentation": { "reveal": "silent" },
+            "problemMatcher": []
+        },
+        {
+            "label": "make",
+            "type": "process",
+            "command": "C:/msys64/usr/bin/bash.exe",
+            "args": ["-lc", "make CROSS= -j8"],
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "make DEBUG=1",
+            "type": "process",
+            "command": "C:/msys64/usr/bin/bash.exe",
+            "args": ["-lc", "make CROSS= DEBUG=1 -j8"],
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Bauen",
+            "dependsOn": ["Lumen beenden", "make"],
+            "dependsOrder": "sequence",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "Bauen und starten",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-Command", "Start-Process '${workspaceFolder}/build/Lumen.exe'"],
+            "dependsOn": ["Bauen"],
+            "group": "build",
+            "presentation": { "reveal": "silent" },
+            "problemMatcher": []
+        },
+        {
+            "label": "Debug-Build",
+            "dependsOn": ["Lumen beenden", "make DEBUG=1"],
+            "dependsOrder": "sequence",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Tests",
+            "type": "process",
+            "command": "C:/msys64/usr/bin/bash.exe",
+            "args": ["-lc", "make CROSS= test"],
+            "group": { "kind": "test", "isDefault": true },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "Aufräumen",
+            "type": "process",
+            "command": "C:/msys64/usr/bin/bash.exe",
+            "args": ["-lc", "make clean"],
+            "problemMatcher": []
+        }
+    ]
+}

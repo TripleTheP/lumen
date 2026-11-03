@@ -37,6 +37,7 @@ using Microsoft::WRL::ComPtr;
 #define APP_VERSION L"0.1.0"
 
 // ---- Strings ---------------------------------------------------------------
+uint64_t Fnv1a(const std::string& s);                  // schnelle Prüfsumme (Cache-Schlüssel, Dateivergleich)
 std::wstring Utf8ToWide(const std::string& s);
 std::string WideToUtf8(const std::wstring& s);
 std::wstring ToLower(std::wstring s);

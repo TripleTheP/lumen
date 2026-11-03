@@ -37,5 +37,8 @@ bool IsPointOverDesktop(POINT pt);
 // Wird der Bildschirm von einem maximierten oder Vollbild-Fenster verdeckt?
 bool IsMonitorCovered(const MonitorInfo& m);
 
+// Läuft im Vordergrund ein Vollbild-Programm (Spiel, Video mit F11)?
+bool IsForegroundFullscreen();
+
 // Gibt Windows den normalen Hintergrund zurück (nach dem Beenden)
 void RefreshSystemWallpaper();

@@ -183,6 +183,19 @@ bool IsMonitorCovered(const MonitorInfo& m) {
     return ctx.covered;
 }
 
+bool IsForegroundFullscreen() {
+    HWND h = GetForegroundWindow();
+    // Maximierte Fenster zählen nicht: bei automatisch ausgeblendeter Taskleiste bedecken sie sonst auch alles
+    if (!h || !IsWindowVisible(h) || IsIconic(h) || IsZoomed(h) || IsShellWindow(h)) return false;
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONULL), &mi)) return false;
+    RECT r{};
+    if (FAILED(DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &r, sizeof(r)))) GetWindowRect(h, &r);
+    const RECT& m = mi.rcMonitor;
+    return r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom;
+}
+
 void RefreshSystemWallpaper() {
     wchar_t path[MAX_PATH * 2] = {};
     SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH * 2, path, 0);

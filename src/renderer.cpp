@@ -52,7 +52,7 @@ static const char* kPrelude = R"HLSL(
 // ---- Lumen Shader-Schnittstelle --------------------------------------------------
 cbuffer LumenConstants : register(b0) {
     float2 iResolution;        // Größe in Pixeln
-    float  iTime;              // Sekunden seit Start
+    float  iTime;              // Sekunden seit Start, beginnt jede Stunde wieder bei 0
     float  iTimeDelta;         // Sekunden seit letztem Bild
     float4 iMouse;             // xy Mausposition (Pixel, oben links = 0,0), z Taste gedrückt, w Maus über Desktop
     float4 iAudio;             // x Bass, y Mitten, z Höhen, w Pegel (0..1)
@@ -164,12 +164,6 @@ const char* ShaderPrelude() { return kPrelude; }
 
 std::string DefaultMediaShader() {
     return "float4 mainImage(float2 fragCoord) { return texFit(fragCoord); }\n";
-}
-
-static uint64_t Fnv1a(const std::string& s) {
-    uint64_t h = 1469598103934665603ull;
-    for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; }
-    return h;
 }
 
 static std::wstring CacheDir() {
