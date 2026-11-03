@@ -1,5 +1,1 @@
 blank_issues_enabled: false
-contact_links:
-  - name: Sicherheitslücke melden
-    url: https://github.com/TripleTheP/lumen/security/advisories/new
-    about: Bitte vertraulich melden, nicht als öffentliches Issue.

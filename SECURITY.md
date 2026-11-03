@@ -2,8 +2,9 @@
 
 ## Sicherheitslücken melden
 
-Bitte **nicht** öffentlich als Issue melden. Nutze stattdessen auf GitHub
-**Security → Report a vulnerability** (vertrauliche Meldung an die Maintainer).
+Bitte **nicht** öffentlich als Issue melden. Schreib stattdessen eine Nachricht an
+[TripleTheP](https://github.com/TripleTheP) über das GitHub-Profil und beschreibe das Problem,
+bevor es öffentlich wird.
 
 ## Was Lumen tut und was nicht
 

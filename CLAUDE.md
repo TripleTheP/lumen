@@ -28,6 +28,8 @@ aber minimaler Ressourcenverbrauch. C++17, Win32, Direct3D 11, keine externen Bi
 - Visual Studio: `cmake -B build -A x64` und `cmake --build build --config Release` (CMake/MSVC noch nicht getestet)
 - GitHub Action `.github/workflows/build.yml` baut bei jedem Push auf `main` und jedem PR; ein Tag `vX.Y.Z` erzeugt ein Release mit der exe
 - Repo-Dateien: `LICENSE` (MIT), `CHANGELOG.md` (bei jeder Änderung unter „Unveröffentlicht" ergänzen), `CONTRIBUTING.md`, `SECURITY.md`, Issue-/PR-Vorlagen in `.github/`
+  (Private Schwachstellenmeldung gibt es erst, wenn das Repo öffentlich ist: dann unter Settings → Security aktivieren
+  und in `SECURITY.md` sowie `.github/ISSUE_TEMPLATE/config.yml` den Link `…/security/advisories/new` eintragen.)
 
 ## Test-Stand (0.1.0)
 Getestet unter Wine (Software-Rendering): Start, alle Shader, Bild, Video inkl. Schleife, Shader-Fehleranzeige, Einzelinstanz/Datei übergeben.
