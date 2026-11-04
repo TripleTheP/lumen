@@ -45,7 +45,8 @@ Rechts zwei Reiter:
 - **Einstellungen:** alle Schalter des Menüs, Bildrate, Renderauflösung und Knöpfe für Zeitplan, Bibliothek und neue Hintergründe.
 
 Das Fenster ändert nichts anderes als das Menü: beides führt dieselben Befehle aus. Schließt du es, gibt Lumen den Speicher wieder frei.
-Es passt sich der Bildschirmskalierung an (auch bei unterschiedlicher Skalierung pro Bildschirm). Bewusst weggelassen: Suche,
+Es richtet sich nach der Bildschirmskalierung (getestet bei 150 %; ein Wechsel zwischen Bildschirmen mit unterschiedlicher Skalierung
+ist noch nicht ausprobiert). Bewusst weggelassen: Suche,
 Ziehen und Ablegen, Vorschaubilder für Wallpaper-Engine-Szenen.
 
 ## Das Menü

@@ -52,7 +52,13 @@ GPU-Last (RTX 4070 Ti SUPER, 4K, 30 fps, Taskmanager-3D): Aurora 12 % → 2,1 % 
 Aurora-Optimierung (überspringt verdeckte Bereiche; Bild pixelgenau gleich, mit GPU-Zeitstempeln gemessen 1,42 → 0,78 ms/Bild in 4K).
 Panorama (`span=1`): Selbsttest beweist, dass Kacheln pixelgleich das Gesamtbild ergeben (auch bei halber Renderauflösung);
 Aufbau: `lumenMap` im cbuffer bildet jeden Bildschirm in den Desktop-Pixelraum ab (`fragCoord = Pixel * zw + xy`), kein gemeinsamer Skalierungsfaktor nötig.
-**Noch nicht auf echtem Windows getestet:** Panorama sichtbar auf den 3 Bildschirmen, Audio-Reaktion sichtbar, Maus/Klick, Video, Katalog-Download über https.
+Vom Nutzer auf echtem Windows bestätigt: Panorama über 3 Bildschirme, „Eigenschaften ändern“ (ini öffnet, Tempo wirkt sichtbar).
+Einstellungsfenster (Linksklick aufs Tray-Symbol): per `SendMessage` bedient geprüft: Schalter, Bildrate, Auswahl per Klick, Reiterwechsel;
+Regler schreibt erst beim Loslassen in die ini (ohne Neuladen); bei aktivem Zeitplan bleibt `config.ini` beim Öffnen unberührt; nach dem
+Schließen gibt Lumen den Speicher frei (7 MB).
+**Noch nicht getestet:** Tab-/Esc-Navigation (`IsDialogMessage`), `WM_DPICHANGED` beim Verschieben auf einen Bildschirm mit anderer Skalierung
+(alle drei Testbildschirme laufen mit 150 %), Farbwahl-Dialog, Audio-Reaktion sichtbar, Maus/Klick, Video, Katalog-Download über https, Vollbild-Test
+im Selbsttest wird bei Windows-Fokussperre übersprungen.
 Diagnose-Schalter: `desktop_layered=1`, `legacy_swapchain=1`.
 Hinweis: GDI-Screenshots (CopyFromScreen) zeigen den Desktop-Bereich hier schwarz – Sichtprüfung des Hintergrunds braucht einen Menschen.
 Normale Fenster (Einstellungsfenster) lassen sich dagegen prüfen: Fenster kurz `HWND_TOPMOST` setzen und nur dessen Rechteck aufnehmen
