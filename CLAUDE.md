@@ -16,7 +16,7 @@ aber minimaler Ressourcenverbrauch. C++17, Win32, Direct3D 11, keine externen Bi
 - `src/desktop.cpp` – Einbettung hinter die Desktop-Symbole (WorkerW klassisch, Win11 24H2 unter Progman, Ersatzmodus ohne Explorer), Verdeckungsprüfung
 - `src/audio.cpp` – WASAPI-Loopback + FFT → 16 Bänder; Thread läuft nur, wenn ein Shader Audio nutzt
 - `src/library.cpp` – Bibliothek (`%LOCALAPPDATA%\Lumen\Bibliothek`), wallpaper.ini, Wallpaper-Engine-Videoimport, Online-Katalog (URLDownloadToFile + tar.exe)
-- `src/settings.cpp` – Einstellungsfenster (Raster mit Vorschaubildern, Reiter „Eigenschaften“ und „Einstellungen“); es ändert nichts selbst:
+- `src/settings.cpp` – Einstellungsfenster, hell/dunkel nach Windows (`SettingsPalette`, `ApplyTheme`; Schalter/Knöpfe/Reiter owner-draw, Regler per NM_CUSTOMDRAW, Tray-Menü dunkel über uxtheme-Ordinal 135/136) (Raster mit Vorschaubildern, Reiter „Eigenschaften“ und „Einstellungen“); es ändert nichts selbst:
   alle Schalter laufen über `SettingsContext::command` in dieselben Menübefehle (`commands.h`, `App::OnCommand`, `App::MenuChecked`), damit
   Tray-Menü und Fenster nicht auseinanderlaufen. Eigenschaften: beim Ziehen nur `Screen::pv` setzen, erst beim Loslassen `SetIniValue` + `iniTime` nachziehen
   (sonst lädt die Dateiüberwachung neu und startet die Animation neu). Auswahl nur bei Klick (`NM_CLICK`), nie bei `LVN_ITEMCHANGED`

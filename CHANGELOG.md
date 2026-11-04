@@ -5,6 +5,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 ## [Unveröffentlicht]
 
 ### Hinzugefügt
+- Modernes Erscheinungsbild: Einstellungsfenster und Tray-Menü folgen dem hellen/dunklen Modus von Windows (auch beim Wechsel zur Laufzeit),
+  dunkle Titelleiste, eigene Schalter, Knöpfe, Reiter und Regler im selben Stil, Akzentfarbe, Hover-Zustände.
 - Einstellungsfenster mit Vorschaubildern: Raster aller Hintergründe, Regler und Farbfelder für Eigenschaften, alle Schalter des
   Menüs. Linksklick auf das Tray-Symbol öffnet es (Rechtsklick: Menü wie bisher). Skaliert mit der Bildschirm-DPI.
 - Animierte GIFs (bisher wurde nur das erste Bild gezeigt): Teilbilder und alle Entsorgungsarten, Bilddauer aus der Datei,

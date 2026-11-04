@@ -3,6 +3,7 @@
 #include "config.h"
 #include "library.h"
 #include "renderer.h"
+#include <commctrl.h>
 #include <functional>
 
 // Vorschaubild eines Hintergrunds (32-Bit-Bitmap, tw x th, Bildmitte; nullptr, wenn nichts erzeugt werden konnte):
@@ -34,6 +35,16 @@ struct SettingsContext {
     std::function<void()> closed;                               // Fenster wurde geschlossen
 };
 
+// Farben des hellen und des dunklen Erscheinungsbilds
+struct SettingsPalette {
+    COLORREF bg, panel, text, dim, accent, border, ctl, hover;
+};
+
+// Dunkles Erscheinungsbild folgt der Windows-Einstellung (Apps: hell/dunkel)
+bool SystemUsesDarkMode();
+void InitDarkMode();           // erlaubt dunkle Popup-Menüs (Tray-Menü); einmal beim Start
+void RefreshDarkMenus();       // nach Wechsel der Windows-Einstellung
+
 class SettingsWindow {
 public:
     explicit SettingsWindow(SettingsContext ctx) : ctx_(std::move(ctx)) {}
@@ -57,6 +68,10 @@ private:
     void RebuildList();
     void RebuildProps();
     void ShowTab(int i);
+    void ApplyTheme();
+    void DrawItem(DRAWITEMSTRUCT* d);
+    LRESULT DrawSlider(NMCUSTOMDRAW* cd);
+    void SetChecked(HWND h, bool on);
     void UpdateScroll();
     void ScrollTo(int pos);
     void MakeNextThumbnail();
@@ -68,8 +83,14 @@ private:
     int Target() const;          // -1 = alle Bildschirme
 
     SettingsContext ctx_;
-    HWND hwnd_ = nullptr, tab_ = nullptr, list_ = nullptr, screenLabel_ = nullptr, screenCombo_ = nullptr;
+    HWND hwnd_ = nullptr, list_ = nullptr, screenLabel_ = nullptr, screenCombo_ = nullptr;
     HWND pageProps_ = nullptr, pageSettings_ = nullptr, propsTitle_ = nullptr;
+    HWND tabBtn_[2] = {};
+    int tabSel_ = 0;
+    bool dark_ = false;
+    SettingsPalette pal_{};
+    HBRUSH brBg_ = nullptr, brPanel_ = nullptr;
+    RECT listFrame_{}, pageFrame_{};
     HWND fpsCombo_ = nullptr, scaleCombo_ = nullptr, fpsLabel_ = nullptr, scaleLabel_ = nullptr;
     std::vector<std::pair<UINT, HWND>> checks_, buttons_;   // Menübefehl -> Steuerelement
     UINT dpi_ = 96;

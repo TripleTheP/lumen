@@ -181,7 +181,8 @@ HBITMAP MakeWallpaperThumbnail(Gfx& gfx, const Wallpaper& w, int tw, int th) {
 // =====================================================================================
 namespace {
 enum : int {
-    IDC_LIST = 50, IDC_TAB, IDC_SCREEN, IDC_FPS, IDC_SCALE,
+    IDC_LIST = 50, IDC_SCREEN, IDC_FPS, IDC_SCALE,
+    IDC_TABBTN = 60,    // + 0/1 (Reiter „Eigenschaften“ und „Einstellungen“)
     IDC_SLIDER = 200,   // + Nummer der Eigenschaft
     IDC_SWATCH = 300,
     IDC_CMD = 2000,     // + Menübefehl (Schalter und Knöpfe)
@@ -210,6 +211,49 @@ const CheckDef kButtons[] = {
 const int kFps[] = {15, 30, 60, 144};
 const int kScales[] = {100, 75, 50};
 
+const SettingsPalette kLight = {RGB(243, 243, 243), RGB(255, 255, 255), RGB(27, 27, 27), RGB(96, 96, 96),
+                                RGB(0, 103, 192), RGB(218, 218, 218), RGB(251, 251, 251), RGB(235, 235, 235)};
+const SettingsPalette kDark = {RGB(32, 32, 32), RGB(43, 43, 43), RGB(255, 255, 255), RGB(165, 165, 165),
+                               RGB(96, 205, 255), RGB(66, 66, 66), RGB(52, 52, 52), RGB(64, 64, 64)};
+
+// uxtheme/dwmapi werden dynamisch geladen: ältere Windows-Versionen kennen manches nicht, dann bleibt es beim hellen Aussehen
+void SetTheme(HWND h, const wchar_t* name) {
+    using Fn = HRESULT(WINAPI*)(HWND, LPCWSTR, LPCWSTR);
+    static Fn fn = (Fn)(void*)GetProcAddress(LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32), "SetWindowTheme");
+    if (fn && h) fn(h, name, nullptr);
+}
+
+void SetDwm(HWND h, DWORD attr, DWORD value) {
+    using Fn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static Fn fn = (Fn)(void*)GetProcAddress(LoadLibraryExW(L"dwmapi.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32), "DwmSetWindowAttribute");
+    if (fn) fn(h, attr, &value, sizeof(value));
+}
+
+// Eigene Knöpfe: Zustand in GWLP_USERDATA (Bit 0 = angehakt, Bit 1 = Maus darüber)
+LRESULT CALLBACK HoverProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR id, DWORD_PTR) {
+    auto setHover = [&](bool on) {
+        LONG_PTR s = GetWindowLongPtrW(h, GWLP_USERDATA);
+        LONG_PTR n = on ? (s | 2) : (s & ~(LONG_PTR)2);
+        if (n != s) {
+            SetWindowLongPtrW(h, GWLP_USERDATA, n);
+            InvalidateRect(h, nullptr, FALSE);
+        }
+    };
+    switch (m) {
+    case WM_MOUSEMOVE: {
+        if (!(GetWindowLongPtrW(h, GWLP_USERDATA) & 2)) {
+            TRACKMOUSEEVENT t{sizeof(t), TME_LEAVE, h, 0};
+            TrackMouseEvent(&t);
+        }
+        setHover(true);
+        break;
+    }
+    case WM_MOUSELEAVE: setHover(false); break;
+    case WM_NCDESTROY: RemoveWindowSubclass(h, HoverProc, id); break;
+    }
+    return DefSubclassProc(h, m, w, l);
+}
+
 std::wstring FormatFloat(float v) {
     wchar_t b[32];
     swprintf(b, 32, L"%.3f", v);
@@ -226,9 +270,192 @@ std::wstring HexColor(const float v[4]) {
 }
 }  // namespace
 
+bool SystemUsesDarkMode() {
+    DWORD v = 1, n = sizeof(v);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",
+                     RRF_RT_REG_DWORD, nullptr, &v, &n) != ERROR_SUCCESS)
+        return false;
+    return v == 0;
+}
+
+// uxtheme-Ordinale 135 (SetPreferredAppMode) und 136 (FlushMenuThemes): nicht dokumentiert, aber seit Windows 10 1903 stabil;
+// fehlen sie, bleibt das Menü einfach hell
+void InitDarkMode() {
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!ux) return;
+    auto setMode = (int(WINAPI*)(int))(void*)GetProcAddress(ux, MAKEINTRESOURCEA(135));
+    if (setMode) setMode(1);   // AllowDark: folgt der Windows-Einstellung
+    RefreshDarkMenus();
+}
+
+void RefreshDarkMenus() {
+    HMODULE ux = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!ux) return;
+    auto flush = (void(WINAPI*)())(void*)GetProcAddress(ux, MAKEINTRESOURCEA(136));
+    if (flush) flush();
+}
+
 SettingsWindow::~SettingsWindow() {
     if (hwnd_) DestroyWindow(hwnd_);
     if (font_) DeleteObject(font_);
+    if (brBg_) DeleteObject(brBg_);
+    if (brPanel_) DeleteObject(brPanel_);
+}
+
+// Farben, Titelleiste und Steuerelement-Themen nach der Windows-Einstellung (hell/dunkel)
+void SettingsWindow::ApplyTheme() {
+    dark_ = SystemUsesDarkMode();
+    pal_ = dark_ ? kDark : kLight;
+    if (brBg_) DeleteObject(brBg_);
+    if (brPanel_) DeleteObject(brPanel_);
+    brBg_ = CreateSolidBrush(pal_.bg);
+    brPanel_ = CreateSolidBrush(pal_.panel);
+    SetDwm(hwnd_, 20, dark_ ? 1 : 0);        // DWMWA_USE_IMMERSIVE_DARK_MODE
+    SetDwm(hwnd_, 35, pal_.bg);              // DWMWA_CAPTION_COLOR (Windows 11): Titelleiste in der Fensterfarbe
+    SetDwm(hwnd_, 36, pal_.text);            // DWMWA_TEXT_COLOR
+    const wchar_t* bars = dark_ ? L"DarkMode_Explorer" : L"Explorer";
+    const wchar_t* combo = dark_ ? L"DarkMode_CFD" : L"CFD";
+    SetTheme(list_, dark_ ? L"DarkMode_ItemsView" : L"Explorer");
+    SetTheme(pageProps_, bars);
+    for (HWND c : {screenCombo_, fpsCombo_, scaleCombo_}) SetTheme(c, combo);
+    ListView_SetBkColor(list_, pal_.panel);
+    ListView_SetTextBkColor(list_, pal_.panel);
+    ListView_SetTextColor(list_, pal_.text);
+    RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+void SettingsWindow::SetChecked(HWND h, bool on) {
+    LONG_PTR s = GetWindowLongPtrW(h, GWLP_USERDATA);
+    LONG_PTR n = on ? (s | 1) : (s & ~(LONG_PTR)1);
+    if (n != s) {
+        SetWindowLongPtrW(h, GWLP_USERDATA, n);
+        InvalidateRect(h, nullptr, FALSE);
+    }
+}
+
+// Eigene Zeichnung für Schalter, Knöpfe, Reiter und Farbfelder (GDI, ohne zusätzliche Bibliotheken)
+void SettingsWindow::DrawItem(DRAWITEMSTRUCT* d) {
+    HDC dc = d->hDC;
+    RECT rc = d->rcItem;
+    int id = (int)d->CtlID;
+    bool disabled = d->itemState & ODS_DISABLED, pressed = d->itemState & ODS_SELECTED;
+    bool focus = (d->itemState & ODS_FOCUS) && !(d->itemState & ODS_NOFOCUSRECT);
+    LONG_PTR st = GetWindowLongPtrW(d->hwndItem, GWLP_USERDATA);
+    bool hover = st & 2, checked = st & 1;
+    HGDIOBJ oldFont = SelectObject(dc, font_);
+    SetBkMode(dc, TRANSPARENT);
+    auto fill = [&](const RECT& r, COLORREF c) {
+        SetDCBrushColor(dc, c);
+        FillRect(dc, &r, (HBRUSH)GetStockObject(DC_BRUSH));
+    };
+    auto box = [&](const RECT& r, int rad, COLORREF f, COLORREF line) {
+        HGDIOBJ op = SelectObject(dc, GetStockObject(DC_PEN)), ob = SelectObject(dc, GetStockObject(DC_BRUSH));
+        SetDCPenColor(dc, line);
+        SetDCBrushColor(dc, f);
+        RoundRect(dc, r.left, r.top, r.right, r.bottom, rad * 2, rad * 2);
+        SelectObject(dc, op);
+        SelectObject(dc, ob);
+    };
+    auto text = [&](RECT r, UINT flags, COLORREF c) {
+        wchar_t buf[256];
+        GetWindowTextW(d->hwndItem, buf, 256);
+        SetTextColor(dc, c);
+        DrawTextW(dc, buf, -1, &r, flags | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    };
+
+    if (id >= IDC_SWATCH && id < IDC_SWATCH + kMaxParams) {
+        size_t i = (size_t)(id - IDC_SWATCH);
+        fill(rc, pal_.panel);
+        if (i < props_.size()) {
+            COLORREF c = RGB((int)std::lround(props_[i].v[0] * 255), (int)std::lround(props_[i].v[1] * 255),
+                             (int)std::lround(props_[i].v[2] * 255));
+            RECT r = rc;
+            InflateRect(&r, -1, -1);
+            box(r, S(5), c, focus ? pal_.accent : (hover ? pal_.text : pal_.border));
+        }
+    } else if (id >= IDC_TABBTN && id < IDC_TABBTN + 2) {
+        bool sel = tabSel_ == id - IDC_TABBTN;
+        fill(rc, hover && !sel ? pal_.hover : pal_.bg);
+        text(rc, DT_CENTER, sel ? pal_.text : pal_.dim);
+        if (sel) {
+            RECT bar{rc.left + S(14), rc.bottom - S(3), rc.right - S(14), rc.bottom};
+            fill(bar, pal_.accent);
+        }
+        if (focus) {
+            RECT f = rc;
+            InflateRect(&f, -S(4), -S(4));
+            SetDCBrushColor(dc, pal_.accent);
+            FrameRect(dc, &f, (HBRUSH)GetStockObject(DC_BRUSH));
+        }
+    } else if (id >= IDC_CMD && std::any_of(checks_.begin(), checks_.end(), [&](auto& c) { return (int)(IDC_CMD + c.first) == id; })) {
+        fill(rc, pal_.panel);
+        int bs = S(18), by = rc.top + (rc.bottom - rc.top - bs) / 2;
+        RECT b{rc.left + S(2), by, rc.left + S(2) + bs, by + bs};
+        COLORREF edge = disabled ? pal_.border : (checked ? pal_.accent : (hover ? pal_.text : pal_.dim));
+        box(b, S(4), checked && !disabled ? pal_.accent : pal_.panel, edge);
+        if (checked) {
+            HPEN pen = CreatePen(PS_SOLID, std::max(2, S(2)), disabled ? pal_.dim : (dark_ ? RGB(0, 0, 0) : RGB(255, 255, 255)));
+            HGDIOBJ op = SelectObject(dc, pen);
+            POINT p[3] = {{b.left + bs * 22 / 100, b.top + bs * 52 / 100}, {b.left + bs * 42 / 100, b.top + bs * 72 / 100},
+                          {b.left + bs * 78 / 100, b.top + bs * 30 / 100}};
+            Polyline(dc, p, 3);
+            SelectObject(dc, op);
+            DeleteObject(pen);
+        }
+        RECT t{b.right + S(10), rc.top, rc.right, rc.bottom};
+        text(t, DT_LEFT | DT_END_ELLIPSIS, disabled ? pal_.dim : pal_.text);
+        if (focus) {
+            RECT f = rc;
+            DrawFocusRect(dc, &f);
+        }
+    } else {   // Knopf
+        fill(rc, pal_.panel);
+        RECT r = rc;
+        InflateRect(&r, -1, -1);
+        box(r, S(5), pressed ? pal_.border : (hover ? pal_.hover : pal_.ctl), focus ? pal_.accent : pal_.border);
+        text(rc, DT_CENTER, disabled ? pal_.dim : pal_.text);
+    }
+    SelectObject(dc, oldFont);
+}
+
+// Regler im selben Stil: dünne Schiene, Teil links vom Griff in der Akzentfarbe, runder Griff
+LRESULT SettingsWindow::DrawSlider(NMCUSTOMDRAW* cd) {
+    HWND bar = cd->hdr.hwndFrom;
+    HDC dc = cd->hdc;
+    if (cd->dwDrawStage == CDDS_PREPAINT) {
+        FillRect(dc, &cd->rc, brPanel_);
+        return CDRF_NOTIFYITEMDRAW;
+    }
+    if (cd->dwDrawStage != CDDS_ITEMPREPAINT) return CDRF_DODEFAULT;
+    RECT thumb;
+    SendMessageW(bar, TBM_GETTHUMBRECT, 0, (LPARAM)&thumb);
+    int cx = (thumb.left + thumb.right) / 2, cy = (thumb.top + thumb.bottom) / 2;
+    auto ellipse = [&](int r, COLORREF f, COLORREF line) {
+        HGDIOBJ op = SelectObject(dc, GetStockObject(DC_PEN)), ob = SelectObject(dc, GetStockObject(DC_BRUSH));
+        SetDCPenColor(dc, line);
+        SetDCBrushColor(dc, f);
+        Ellipse(dc, cx - r, cy - r, cx + r + 1, cy + r + 1);
+        SelectObject(dc, op);
+        SelectObject(dc, ob);
+    };
+    if (cd->dwItemSpec == TBCD_CHANNEL) {
+        FillRect(dc, &cd->rc, brPanel_);
+        int h = std::max(3, S(4)), mid = (cd->rc.top + cd->rc.bottom) / 2;
+        RECT all{cd->rc.left, mid - h / 2, cd->rc.right, mid - h / 2 + h}, on = all;
+        on.right = std::min(on.right, (LONG)cx);
+        SetDCBrushColor(dc, pal_.border);
+        FillRect(dc, &all, (HBRUSH)GetStockObject(DC_BRUSH));
+        SetDCBrushColor(dc, pal_.accent);
+        FillRect(dc, &on, (HBRUSH)GetStockObject(DC_BRUSH));
+        return CDRF_SKIPDEFAULT;
+    }
+    if (cd->dwItemSpec == TBCD_THUMB) {
+        bool active = (cd->uItemState & CDIS_SELECTED) || (cd->uItemState & CDIS_FOCUS);
+        ellipse(S(10), pal_.ctl, pal_.border);
+        ellipse(active ? S(6) : S(5), pal_.accent, pal_.accent);
+        return CDRF_SKIPDEFAULT;
+    }
+    return CDRF_DODEFAULT;
 }
 
 void SettingsWindow::MakeFont() {
@@ -268,7 +495,7 @@ void SettingsWindow::Show() {
         wc.hInstance = inst;
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
-        wc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
+        wc.hbrBackground = nullptr;   // Hintergrund zeichnen wir selbst (hell/dunkel)
         wc.lpszClassName = kClass;
         RegisterClassExW(&wc);
         wc.lpfnWndProc = PageProc;
@@ -332,8 +559,18 @@ LRESULT CALLBACK SettingsWindow::PageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return SendMessageW(GetParent(h), m, w, l);
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
+        if (!self || !self->brPanel_) break;
         SetBkMode((HDC)w, TRANSPARENT);
-        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        SetTextColor((HDC)w, self->pal_.text);
+        return (LRESULT)self->brPanel_;
+    case WM_ERASEBKGND:
+        if (!self || !self->brPanel_) break;
+        {
+            RECT rc;
+            GetClientRect(h, &rc);
+            FillRect((HDC)w, &rc, self->brPanel_);
+        }
+        return 1;
     case WM_VSCROLL:
         if (self) self->OnScroll(h, w);
         return 0;
@@ -354,16 +591,11 @@ void SettingsWindow::CreateControls() {
     };
     screenLabel_ = child(L"STATIC", L"Anzeigen auf:", SS_LEFT, 0, hwnd_);
     screenCombo_ = child(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP, IDC_SCREEN, hwnd_);
-    list_ = child(WC_LISTVIEWW, L"", LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_AUTOARRANGE | WS_TABSTOP | WS_BORDER,
-                  IDC_LIST, hwnd_, WS_EX_CLIENTEDGE);
+    list_ = child(WC_LISTVIEWW, L"", LVS_ICON | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_AUTOARRANGE | WS_TABSTOP, IDC_LIST, hwnd_);
     ListView_SetExtendedListViewStyle(list_, LVS_EX_DOUBLEBUFFER);
-    tab_ = child(WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS, IDC_TAB, hwnd_);
-    TCITEMW ti{};
-    ti.mask = TCIF_TEXT;
-    ti.pszText = (LPWSTR)L"Eigenschaften";
-    TabCtrl_InsertItem(tab_, 0, &ti);
-    ti.pszText = (LPWSTR)L"Einstellungen";
-    TabCtrl_InsertItem(tab_, 1, &ti);
+    // Eigene Reiter statt des Tab-Steuerelements (das lässt sich nicht dunkel färben)
+    tabBtn_[0] = child(L"BUTTON", L"Eigenschaften", BS_OWNERDRAW | WS_TABSTOP, IDC_TABBTN, hwnd_);
+    tabBtn_[1] = child(L"BUTTON", L"Einstellungen", BS_OWNERDRAW | WS_TABSTOP, IDC_TABBTN + 1, hwnd_);
 
     auto page = [&]() {
         return CreateWindowExW(WS_EX_CONTROLPARENT, kPageClass, L"", WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS, 0, 0, 10, 10,
@@ -374,36 +606,42 @@ void SettingsWindow::CreateControls() {
     propsTitle_ = child(L"STATIC", L"", SS_LEFT, 0, pageProps_);
 
     for (auto& c : kChecks)
-        checks_.push_back({c.cmd, child(L"BUTTON", c.text, BS_AUTOCHECKBOX | WS_TABSTOP, IDC_CMD + c.cmd, pageSettings_)});
+        checks_.push_back({c.cmd, child(L"BUTTON", c.text, BS_OWNERDRAW | WS_TABSTOP, IDC_CMD + c.cmd, pageSettings_)});
     fpsLabel_ = child(L"STATIC", L"Bildrate:", SS_LEFT, 0, pageSettings_);
     fpsCombo_ = child(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, IDC_FPS, pageSettings_);
     for (int f : kFps) ComboBox_AddString(fpsCombo_, (std::to_wstring(f) + L" Bilder pro Sekunde").c_str());
     scaleLabel_ = child(L"STATIC", L"Renderauflösung:", SS_LEFT, 0, pageSettings_);
     scaleCombo_ = child(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, IDC_SCALE, pageSettings_);
     for (int s : kScales) ComboBox_AddString(scaleCombo_, (std::to_wstring(s) + L" %").c_str());
-    for (auto& b : kButtons) buttons_.push_back({b.cmd, child(L"BUTTON", b.text, BS_PUSHBUTTON | WS_TABSTOP, IDC_CMD + b.cmd, pageSettings_)});
+    for (auto& b : kButtons) buttons_.push_back({b.cmd, child(L"BUTTON", b.text, BS_OWNERDRAW | WS_TABSTOP, IDC_CMD + b.cmd, pageSettings_)});
+    for (HWND h : {tabBtn_[0], tabBtn_[1]}) SetWindowSubclass(h, HoverProc, 1, 0);
+    for (auto& c : checks_) SetWindowSubclass(c.second, HoverProc, 1, 0);
+    for (auto& b : buttons_) SetWindowSubclass(b.second, HoverProc, 1, 0);
     ApplyFont();
+    ApplyTheme();
 }
 
 void SettingsWindow::Layout() {
-    if (!hwnd_ || !tab_) return;
+    if (!hwnd_ || !tabBtn_[0]) return;
     RECT rc;
     GetClientRect(hwnd_, &rc);
-    int W = rc.right, H = rc.bottom, m = S(12), rw = S(370);
-    int top = comboShown_ ? S(36) : 0;
+    int W = rc.right, H = rc.bottom, m = S(16), rw = S(370);
+    int top = comboShown_ ? S(38) : 0;
     MoveWindow(screenLabel_, m, m + S(5), S(110), S(22), TRUE);
     MoveWindow(screenCombo_, m + S(112), m, S(260), S(300), TRUE);
-    MoveWindow(list_, m, m + top, std::max(S(200), W - 3 * m - rw), std::max(S(100), H - 2 * m - top), TRUE);
-    int tx = W - m - rw, ty = m, th = H - 2 * m;
-    SetWindowPos(tab_, HWND_BOTTOM, tx, ty, rw, th, SWP_NOACTIVATE);
-    RECT pr{0, 0, rw, th};
-    TabCtrl_AdjustRect(tab_, FALSE, &pr);
-    // Die Seiten liegen über dem Tab-Steuerelement (das nur Reiter und Rahmen zeichnet)
-    for (HWND p : {pageProps_, pageSettings_})
-        SetWindowPos(p, HWND_TOP, tx + pr.left, ty + pr.top, pr.right - pr.left, pr.bottom - pr.top, SWP_NOACTIVATE);
+    int lw = std::max(S(200), W - 3 * m - rw), lh = std::max(S(100), H - 2 * m - top);
+    MoveWindow(list_, m, m + top, lw, lh, TRUE);
+    listFrame_ = {m - 1, m + top - 1, m + lw + 1, m + top + lh + 1};
+    int tx = W - m - rw, ty = m, th = H - 2 * m, tabH = S(38);
+    MoveWindow(tabBtn_[0], tx, ty, rw / 2, tabH, TRUE);
+    MoveWindow(tabBtn_[1], tx + rw / 2, ty, rw - rw / 2, tabH, TRUE);
+    int py = ty + tabH + S(4), ph = std::max(S(100), th - tabH - S(4));
+    for (HWND p : {pageProps_, pageSettings_}) SetWindowPos(p, HWND_TOP, tx, py, rw, ph, SWP_NOACTIVATE);
+    pageFrame_ = {tx - 1, py - 1, tx + rw + 1, py + ph + 1};
     LayoutSettingsPage();
     LayoutPropsPage();
     UpdateScroll();
+    InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
 void SettingsWindow::LayoutSettingsPage() {
@@ -412,7 +650,7 @@ void SettingsWindow::LayoutSettingsPage() {
     int x = S(10), w = rc.right - 2 * x, y = S(10);
     for (auto& c : checks_) {
         MoveWindow(c.second, x, y, w, S(22), TRUE);
-        y += S(26);
+        y += S(30);
     }
     y += S(8);
     MoveWindow(fpsLabel_, x, y + S(4), S(120), S(22), TRUE);
@@ -476,7 +714,9 @@ void SettingsWindow::OnScroll(HWND bar, WPARAM wp) {
 }
 
 void SettingsWindow::ShowTab(int i) {
-    TabCtrl_SetCurSel(tab_, i);
+    tabSel_ = i;
+    InvalidateRect(tabBtn_[0], nullptr, FALSE);
+    InvalidateRect(tabBtn_[1], nullptr, FALSE);
     ShowWindow(pageProps_, i == 0 ? SW_SHOW : SW_HIDE);
     ShowWindow(pageSettings_, i == 1 ? SW_SHOW : SW_HIDE);
 }
@@ -637,7 +877,7 @@ void SettingsWindow::Refresh(bool rescan) {
     ShowWindow(screenCombo_, showCombo ? SW_SHOW : SW_HIDE);
     if (showCombo != wasShown) Layout();
 
-    for (auto& c : checks_) Button_SetCheck(c.second, ctx_.checked(c.first) ? BST_CHECKED : BST_UNCHECKED);
+    for (auto& c : checks_) SetChecked(c.second, ctx_.checked(c.first));
     for (auto& c : checks_)
         if (c.first == ID_SPAN) EnableWindow(c.second, screens_.size() > 1 || ctx_.checked(ID_SPAN));
     int fps = ctx_.cfg->Fps(), scale = (int)std::lround(ctx_.cfg->RenderScale() * 100);
@@ -705,12 +945,39 @@ LRESULT SettingsWindow::OnMessage(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (w == TIMER_THUMB) MakeNextThumbnail();
         return 0;
     case WM_CTLCOLORSTATIC:   // Beschriftungen ohne grauen Kasten
+        if (!brBg_) break;
         SetBkMode((HDC)w, TRANSPARENT);
-        return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        SetTextColor((HDC)w, pal_.text);
+        return (LRESULT)brBg_;
+    case WM_ERASEBKGND: {
+        if (!brBg_) break;
+        RECT rc;
+        GetClientRect(h, &rc);
+        FillRect((HDC)w, &rc, brBg_);
+        return 1;
+    }
+    case WM_PAINT: {   // dünne Rahmen um das Raster und die Seiten
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        if (brBg_) {
+            SetDCBrushColor(dc, pal_.border);
+            for (const RECT* r : {&listFrame_, &pageFrame_}) FrameRect(dc, r, (HBRUSH)GetStockObject(DC_BRUSH));
+        }
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_SETTINGCHANGE:   // Windows wechselt zwischen hell und dunkel
+        if (l && lstrcmpW((LPCWSTR)l, L"ImmersiveColorSet") == 0 && tabBtn_[0]) {
+            RefreshDarkMenus();
+            ApplyTheme();
+        }
+        return 0;
     case WM_COMMAND: {
         int id = LOWORD(w), code = HIWORD(w);
         if (id == IDCANCEL) { Close(); return 0; }
-        if (id >= IDC_CMD && code == BN_CLICKED) {
+        if (id >= IDC_TABBTN && id < IDC_TABBTN + 2 && code == BN_CLICKED) {
+            ShowTab(id - IDC_TABBTN);
+        } else if (id >= IDC_CMD && code == BN_CLICKED) {
             ctx_.command((UINT)(id - IDC_CMD));
             Refresh(true);
         } else if (id == IDC_FPS && code == CBN_SELCHANGE) {
@@ -728,9 +995,9 @@ LRESULT SettingsWindow::OnMessage(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_NOTIFY: {
         auto* nh = (NMHDR*)l;
-        if (nh->idFrom == IDC_TAB && nh->code == TCN_SELCHANGE) {
-            ShowTab(TabCtrl_GetCurSel(tab_));
-        } else if (nh->idFrom == IDC_LIST && (nh->code == NM_CLICK || nh->code == LVN_ITEMACTIVATE)) {
+        if (nh->code == NM_CUSTOMDRAW && nh->idFrom >= IDC_SLIDER && nh->idFrom < IDC_SLIDER + kMaxParams)
+            return DrawSlider((NMCUSTOMDRAW*)l);
+        if (nh->idFrom == IDC_LIST && (nh->code == NM_CLICK || nh->code == LVN_ITEMACTIVATE)) {
             auto* a = (NMITEMACTIVATE*)l;
             if (a->iItem >= 0) {
                 LVITEMW it{};
@@ -755,19 +1022,7 @@ LRESULT SettingsWindow::OnMessage(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_DRAWITEM: {
-        auto* d = (DRAWITEMSTRUCT*)l;
-        int i = (int)d->CtlID - IDC_SWATCH;
-        if (i < 0 || i >= (int)props_.size()) return FALSE;
-        HBRUSH b = CreateSolidBrush(RGB((int)std::lround(props_[i].v[0] * 255), (int)std::lround(props_[i].v[1] * 255),
-                                        (int)std::lround(props_[i].v[2] * 255)));
-        FillRect(d->hDC, &d->rcItem, b);
-        DeleteObject(b);
-        FrameRect(d->hDC, &d->rcItem, (HBRUSH)GetStockObject(BLACK_BRUSH));
-        if (d->itemState & ODS_FOCUS) {
-            RECT f = d->rcItem;
-            InflateRect(&f, -3, -3);
-            DrawFocusRect(d->hDC, &f);
-        }
+        DrawItem((DRAWITEMSTRUCT*)l);
         return TRUE;
     }
     case WM_CLOSE:
@@ -776,7 +1031,7 @@ LRESULT SettingsWindow::OnMessage(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_DESTROY:
         KillTimer(hwnd_, TIMER_THUMB);
         hwnd_ = nullptr;
-        tab_ = list_ = nullptr;
+        tabBtn_[0] = tabBtn_[1] = list_ = nullptr;
         if (ctx_.closed) ctx_.closed();
         return 0;
     }

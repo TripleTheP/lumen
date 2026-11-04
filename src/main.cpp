@@ -201,6 +201,7 @@ int App::Run(HINSTANCE inst, const std::wstring& cmdFile) {
     LogInit();
     Log(L"Lumen %s startet", APP_VERSION);
     SetPriorityClass(GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS);
+    InitDarkMode();   // Tray-Menü folgt hell/dunkel von Windows
 
     cfg_.Load();
     lib_.WriteExamples();
@@ -347,6 +348,7 @@ LRESULT App::HandleMsg(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetTimer(h, TIMER_REBUILD, 800, nullptr);
         return 0;
     case WM_SETTINGCHANGE:
+        if (l && lstrcmpW((LPCWSTR)l, L"ImmersiveColorSet") == 0) RefreshDarkMenus();
         if (w == SPI_SETWORKAREA) {
             auto mons = EnumMonitors();
             for (auto& s : screens_)
