@@ -42,4 +42,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" Lumen.exe --title "Lumen ${GITHUB_REF_NAME#v}" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" Lumen.exe --draft --title "Lumen ${GITHUB_REF_NAME#v}" --generate-notes

@@ -34,7 +34,7 @@
 using Microsoft::WRL::ComPtr;
 
 #define APP_NAME L"Lumen"
-#define APP_VERSION L"0.1.0"
+#define APP_VERSION L"0.2.0"
 
 // ---- Strings ---------------------------------------------------------------
 uint64_t Fnv1a(const std::string& s);                  // schnelle Prüfsumme (Cache-Schlüssel, Dateivergleich)

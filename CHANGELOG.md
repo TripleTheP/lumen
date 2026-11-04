@@ -4,6 +4,8 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 
 ## [Unveröffentlicht]
 
+## [0.2.0] – 2026-11-04
+
 ### Hinzugefügt
 - Modernes Erscheinungsbild: Einstellungsfenster und Tray-Menü folgen dem hellen/dunklen Modus von Windows (auch beim Wechsel zur Laufzeit),
   dunkle Titelleiste, Schiebeschalter, Knöpfe, Reiter und Regler im selben Stil, Windows-Akzentfarbe, Hover-Zustände, Einstellungen in Gruppen.
@@ -39,5 +41,6 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 Erste Version: Shader, Bilder und Videos hinter den Desktop-Symbolen (Direct3D 11), Audio-Reaktion, Bibliothek,
 Online-Katalog, Import von Wallpaper-Engine-Videos, automatische Pausen.
 
-[Unveröffentlicht]: https://github.com/TripleTheP/lumen/compare/v0.1.0...HEAD
+[Unveröffentlicht]: https://github.com/TripleTheP/lumen/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/TripleTheP/lumen/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/TripleTheP/lumen/releases/tag/v0.1.0
