@@ -94,7 +94,8 @@ private:
     HWND fpsCombo_ = nullptr, scaleCombo_ = nullptr, fpsLabel_ = nullptr, scaleLabel_ = nullptr;
     std::vector<std::pair<UINT, HWND>> checks_, buttons_;   // Menübefehl -> Steuerelement
     UINT dpi_ = 96;
-    HFONT font_ = nullptr;
+    HFONT font_ = nullptr, headFont_ = nullptr;
+    std::vector<std::pair<size_t, HWND>> heads_;   // Überschriften der Einstellungsseite (vor Schalter Nr.)
     int thumbW_ = 0, thumbH_ = 0;
 
     std::vector<Wallpaper> items_;

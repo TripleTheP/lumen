@@ -185,6 +185,7 @@ enum : int {
     IDC_TABBTN = 60,    // + 0/1 (Reiter „Eigenschaften“ und „Einstellungen“)
     IDC_SLIDER = 200,   // + Nummer der Eigenschaft
     IDC_SWATCH = 300,
+    IDC_HEAD = 70,     // + 0..2 (Überschriften)
     IDC_CMD = 2000,     // + Menübefehl (Schalter und Knöpfe)
 };
 const UINT TIMER_THUMB = 1;
@@ -194,14 +195,17 @@ struct CheckDef { UINT cmd; const wchar_t* text; };
 const CheckDef kChecks[] = {
     {ID_BATTERY, L"Im Akkubetrieb und Energiesparmodus pausieren"},
     {ID_FULLSCREEN, L"Bei Vollbild-Programmen alle Bildschirme pausieren"},
-    {ID_AUDIO, L"Auf Musik reagieren"},
+    {ID_PAUSE, L"Alles pausieren"},
     {ID_SHADER_RES, L"Shader höchstens in 1080p berechnen (spart GPU)"},
     {ID_SPAN, L"Ein Hintergrund über alle Bildschirme (Panorama)"},
-    {ID_SCHEDULE, L"Zeitplan: Hintergrund nach Tageszeit"},
+    {ID_AUDIO, L"Auf Musik reagieren"},
     {ID_WE, L"Videos aus Wallpaper Engine anzeigen"},
+    {ID_SCHEDULE, L"Zeitplan: Hintergrund nach Tageszeit"},
     {ID_AUTOSTART, L"Mit Windows starten"},
-    {ID_PAUSE, L"Alles pausieren"},
 };
+// Überschriften: vor dem Schalter mit diesem Index; Bildrate und Auflösung stehen vor „Allgemein“
+struct HeadDef { size_t before; const wchar_t* text; };
+const HeadDef kHeads[] = {{0, L"PAUSIEREN"}, {3, L"DARSTELLUNG"}, {8, L"ALLGEMEIN"}};
 const CheckDef kButtons[] = {
     {ID_EDITSCHEDULE, L"Zeitplan bearbeiten…"},
     {ID_ADDFILE, L"Bild oder Video hinzufügen…"},
@@ -297,6 +301,7 @@ void RefreshDarkMenus() {
 
 SettingsWindow::~SettingsWindow() {
     if (hwnd_) DestroyWindow(hwnd_);
+    if (headFont_) DeleteObject(headFont_);
     if (font_) DeleteObject(font_);
     if (brBg_) DeleteObject(brBg_);
     if (brPanel_) DeleteObject(brPanel_);
@@ -306,6 +311,13 @@ SettingsWindow::~SettingsWindow() {
 void SettingsWindow::ApplyTheme() {
     dark_ = SystemUsesDarkMode();
     pal_ = dark_ ? kDark : kLight;
+    // Akzentfarbe von Windows (Einstellungen → Personalisierung → Farben); im dunklen Modus aufgehellt, damit sie lesbar bleibt
+    DWORD ac = 0, an = sizeof(ac);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\DWM", L"AccentColor", RRF_RT_REG_DWORD, nullptr, &ac, &an) == ERROR_SUCCESS) {
+        int r = GetRValue(ac), g = GetGValue(ac), b = GetBValue(ac);   // Wert ist ABGR
+        if (dark_) { r += (255 - r) * 35 / 100; g += (255 - g) * 35 / 100; b += (255 - b) * 35 / 100; }
+        pal_.accent = RGB(r, g, b);
+    }
     if (brBg_) DeleteObject(brBg_);
     if (brPanel_) DeleteObject(brPanel_);
     brBg_ = CreateSolidBrush(pal_.bg);
@@ -389,24 +401,35 @@ void SettingsWindow::DrawItem(DRAWITEMSTRUCT* d) {
         }
     } else if (id >= IDC_CMD && std::any_of(checks_.begin(), checks_.end(), [&](auto& c) { return (int)(IDC_CMD + c.first) == id; })) {
         fill(rc, pal_.panel);
-        int bs = S(18), by = rc.top + (rc.bottom - rc.top - bs) / 2;
-        RECT b{rc.left + S(2), by, rc.left + S(2) + bs, by + bs};
-        COLORREF edge = disabled ? pal_.border : (checked ? pal_.accent : (hover ? pal_.text : pal_.dim));
-        box(b, S(4), checked && !disabled ? pal_.accent : pal_.panel, edge);
-        if (checked) {
-            HPEN pen = CreatePen(PS_SOLID, std::max(2, S(2)), disabled ? pal_.dim : (dark_ ? RGB(0, 0, 0) : RGB(255, 255, 255)));
-            HGDIOBJ op = SelectObject(dc, pen);
-            POINT p[3] = {{b.left + bs * 22 / 100, b.top + bs * 52 / 100}, {b.left + bs * 42 / 100, b.top + bs * 72 / 100},
-                          {b.left + bs * 78 / 100, b.top + bs * 30 / 100}};
-            Polyline(dc, p, 3);
-            SelectObject(dc, op);
-            DeleteObject(pen);
-        }
-        RECT t{b.right + S(10), rc.top, rc.right, rc.bottom};
+        // Schalter im Stil von Windows 11: Text links, Schiebeschalter rechts
+        int pw = S(40), ph = S(20), py = rc.top + (rc.bottom - rc.top - ph) / 2;
+        RECT pill{rc.right - pw - S(2), py, rc.right - S(2), py + ph};
+        COLORREF off = disabled ? pal_.border : (hover ? pal_.text : pal_.dim);
+        if (checked && !disabled) box(pill, ph / 2, pal_.accent, pal_.accent);
+        else box(pill, ph / 2, pal_.panel, off);
+        int kr = checked ? S(6) : S(5), kx = checked ? pill.right - ph / 2 : pill.left + ph / 2, ky = py + ph / 2;
+        COLORREF knob = checked && !disabled ? (dark_ ? RGB(0, 0, 0) : RGB(255, 255, 255)) : off;
+        HGDIOBJ op = SelectObject(dc, GetStockObject(DC_PEN)), ob = SelectObject(dc, GetStockObject(DC_BRUSH));
+        SetDCPenColor(dc, knob);
+        SetDCBrushColor(dc, knob);
+        Ellipse(dc, kx - kr, ky - kr, kx + kr + 1, ky + kr + 1);
+        SelectObject(dc, op);
+        SelectObject(dc, ob);
+        RECT t{rc.left, rc.top, pill.left - S(12), rc.bottom};
         text(t, DT_LEFT | DT_END_ELLIPSIS, disabled ? pal_.dim : pal_.text);
         if (focus) {
-            RECT f = rc;
-            DrawFocusRect(dc, &f);
+            RECT f{pill.left - S(3), pill.top - S(3), pill.right + S(3), pill.bottom + S(3)};
+            box(f, ph / 2 + S(3), pal_.panel, pal_.accent);
+            // Rahmen statt Füllung: Schalter erneut darüber legen
+            if (checked && !disabled) box(pill, ph / 2, pal_.accent, pal_.accent);
+            else box(pill, ph / 2, pal_.panel, off);
+            SetDCPenColor(dc, knob);
+            op = SelectObject(dc, GetStockObject(DC_PEN));
+            ob = SelectObject(dc, GetStockObject(DC_BRUSH));
+            SetDCBrushColor(dc, knob);
+            Ellipse(dc, kx - kr, ky - kr, kx + kr + 1, ky + kr + 1);
+            SelectObject(dc, op);
+            SelectObject(dc, ob);
         }
     } else {   // Knopf
         fill(rc, pal_.panel);
@@ -471,6 +494,9 @@ void SettingsWindow::MakeFont() {
     }
     if (font_) DeleteObject(font_);
     font_ = CreateFontIndirectW(&ncm.lfMessageFont);
+    if (headFont_) DeleteObject(headFont_);
+    ncm.lfMessageFont.lfWeight = FW_SEMIBOLD;
+    headFont_ = CreateFontIndirectW(&ncm.lfMessageFont);
 }
 
 void SettingsWindow::ApplyFont() {
@@ -478,6 +504,7 @@ void SettingsWindow::ApplyFont() {
         SendMessageW(h, WM_SETFONT, (WPARAM)l, TRUE);
         return TRUE;
     }, (LPARAM)font_);
+    for (auto& hd : heads_) SendMessageW(hd.second, WM_SETFONT, (WPARAM)headFont_, TRUE);
 }
 
 void SettingsWindow::Show() {
@@ -563,7 +590,7 @@ LRESULT CALLBACK SettingsWindow::PageProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CTLCOLORBTN:
         if (!self || !self->brPanel_) break;
         SetBkMode((HDC)w, TRANSPARENT);
-        SetTextColor((HDC)w, self->pal_.text);
+        SetTextColor((HDC)w, GetDlgCtrlID((HWND)l) >= IDC_HEAD && GetDlgCtrlID((HWND)l) < IDC_HEAD + 8 ? self->pal_.dim : self->pal_.text);
         return (LRESULT)self->brPanel_;
     case WM_ERASEBKGND:
         if (!self || !self->brPanel_) break;
@@ -609,6 +636,8 @@ void SettingsWindow::CreateControls() {
 
     for (auto& c : kChecks)
         checks_.push_back({c.cmd, child(L"BUTTON", c.text, BS_OWNERDRAW | WS_TABSTOP, IDC_CMD + c.cmd, pageSettings_)});
+    for (size_t i = 0; i < std::size(kHeads); i++)
+        heads_.push_back({kHeads[i].before, child(L"STATIC", kHeads[i].text, SS_LEFT, IDC_HEAD + (int)i, pageSettings_)});
     fpsLabel_ = child(L"STATIC", L"Bildrate:", SS_LEFT, 0, pageSettings_);
     fpsCombo_ = child(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP, IDC_FPS, pageSettings_);
     for (int f : kFps) ComboBox_AddString(fpsCombo_, (std::to_wstring(f) + L" Bilder pro Sekunde").c_str());
@@ -649,18 +678,30 @@ void SettingsWindow::Layout() {
 void SettingsWindow::LayoutSettingsPage() {
     RECT rc;
     GetClientRect(pageSettings_, &rc);
-    int x = S(10), w = rc.right - 2 * x, y = S(10);
-    for (auto& c : checks_) {
-        MoveWindow(c.second, x, y, w, S(22), TRUE);
+    int x = S(16), w = rc.right - 2 * x, y = S(14);
+    auto head = [&](size_t before) {
+        for (auto& hd : heads_)
+            if (hd.first == before) {
+                if (y > S(20)) y += S(8);
+                MoveWindow(hd.second, x, y, w, S(18), TRUE);
+                y += S(24);
+            }
+    };
+    auto combos = [&]() {
+        MoveWindow(fpsLabel_, x, y + S(5), S(130), S(22), TRUE);
+        MoveWindow(fpsCombo_, x + S(140), y, w - S(140), S(200), TRUE);
+        y += S(34);
+        MoveWindow(scaleLabel_, x, y + S(5), S(130), S(22), TRUE);
+        MoveWindow(scaleCombo_, x + S(140), y, w - S(140), S(200), TRUE);
+        y += S(34);
+    };
+    for (size_t i = 0; i < checks_.size(); i++) {
+        if (i + 1 == checks_.size()) combos();
+        head(i);
+        MoveWindow(checks_[i].second, x, y, w, S(24), TRUE);
         y += S(30);
     }
     y += S(8);
-    MoveWindow(fpsLabel_, x, y + S(4), S(120), S(22), TRUE);
-    MoveWindow(fpsCombo_, x + S(130), y, w - S(130), S(200), TRUE);
-    y += S(32);
-    MoveWindow(scaleLabel_, x, y + S(4), S(120), S(22), TRUE);
-    MoveWindow(scaleCombo_, x + S(130), y, w - S(130), S(200), TRUE);
-    y += S(44);
     for (auto& b : buttons_) {
         MoveWindow(b.second, x, y, w, S(30), TRUE);
         y += S(36);
