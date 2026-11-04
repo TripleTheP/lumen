@@ -451,8 +451,10 @@ LRESULT SettingsWindow::DrawSlider(NMCUSTOMDRAW* cd) {
     }
     if (cd->dwItemSpec == TBCD_THUMB) {
         bool active = (cd->uItemState & CDIS_SELECTED) || (cd->uItemState & CDIS_FOCUS);
-        ellipse(S(10), pal_.ctl, pal_.border);
-        ellipse(active ? S(6) : S(5), pal_.accent, pal_.accent);
+        FillRect(dc, &cd->rc, brPanel_);   // alles im Griff-Rechteck löschen, sonst bleiben Schlieren
+        int rad = std::max(4, (int)std::min(thumb.right - thumb.left, thumb.bottom - thumb.top) / 2 - 1);
+        ellipse(rad, pal_.ctl, pal_.border);
+        ellipse(active ? rad * 6 / 10 : rad * 5 / 10, pal_.accent, pal_.accent);
         return CDRF_SKIPDEFAULT;
     }
     return CDRF_DODEFAULT;
@@ -828,9 +830,10 @@ void SettingsWindow::RebuildProps() {
                                      (HMENU)(INT_PTR)(IDC_SWATCH + i), inst, nullptr);
             propCtrls_.push_back(swatch);
         } else {
-            slider = CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS, 0, 0, 10, 10,
+            slider = CreateWindowExW(0, TRACKBAR_CLASSW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS | TBS_FIXEDLENGTH, 0, 0, 10, 10,
                                      pageProps_, (HMENU)(INT_PTR)(IDC_SLIDER + i), inst, nullptr);
             SendMessageW(slider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 1000));
+            SendMessageW(slider, TBM_SETTHUMBLENGTH, S(22), 0);
             SendMessageW(slider, TBM_SETPOS, TRUE, (LPARAM)std::lround((props_[i].v[0] - p.mn) / (p.mx - p.mn) * 1000));
             propCtrls_.push_back(slider);
         }
