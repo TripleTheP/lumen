@@ -452,7 +452,7 @@ LRESULT SettingsWindow::DrawSlider(NMCUSTOMDRAW* cd) {
     if (cd->dwItemSpec == TBCD_THUMB) {
         bool active = (cd->uItemState & CDIS_SELECTED) || (cd->uItemState & CDIS_FOCUS);
         FillRect(dc, &cd->rc, brPanel_);   // alles im Griff-Rechteck löschen, sonst bleiben Schlieren
-        int rad = std::max(4, (int)std::min(thumb.right - thumb.left, thumb.bottom - thumb.top) / 2 - 1);
+        int rad = std::min(S(9), (int)std::min(thumb.right - thumb.left, thumb.bottom - thumb.top) / 2);
         ellipse(rad, pal_.ctl, pal_.border);
         ellipse(active ? rad * 6 / 10 : rad * 5 / 10, pal_.accent, pal_.accent);
         return CDRF_SKIPDEFAULT;
@@ -1019,6 +1019,7 @@ LRESULT SettingsWindow::OnMessage(HWND h, UINT m, WPARAM w, LPARAM l) {
         int code = LOWORD(w);
         float v = p.mn + (float)SendMessageW(bar, TBM_GETPOS, 0, 0) / 1000.0f * (p.mx - p.mn);
         props_[i].v[0] = v;
+        InvalidateRect(bar, nullptr, FALSE);   // ganze Schiene neu zeichnen (der gefüllte Teil ändert sich über den Griff hinaus)
         SetWindowTextW(propValueLabels_[i], ((p.label.empty() ? p.name : p.label) + L":  " + FormatFloat(v)).c_str());
         // Beim Ziehen nur anzeigen (sofort, ohne Neuladen); erst beim Loslassen in die ini schreiben
         ctx_.setProp(p.name, FormatFloat(v), code != TB_THUMBTRACK);
