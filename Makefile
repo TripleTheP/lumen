@@ -13,7 +13,7 @@ CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field
            -DUNICODE -D_UNICODE -municode -ffunction-sections -fdata-sections
 LDFLAGS  = -municode -mwindows -static -s -Wl,--gc-sections
 LIBS     = -ld3d11 -ldxgi -lmfuuid -lole32 -loleaut32 -luuid -lwindowscodecs \
-           -lshell32 -lcomdlg32 -ldwmapi -lwtsapi32 -lurlmon -lwininet -lpropsys -luser32 -lgdi32 -ladvapi32
+           -lshell32 -lcomdlg32 -ldwmapi -lwtsapi32 -lurlmon -lwininet -lpropsys -lcomctl32 -luser32 -lgdi32 -ladvapi32
 
 # Debug-Build mit Symbolen für gdb: make DEBUG=1 -> build/debug/Lumen.exe
 OUT = build

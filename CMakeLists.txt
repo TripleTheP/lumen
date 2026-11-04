@@ -21,4 +21,4 @@ endif()
 
 target_link_libraries(Lumen PRIVATE
   d3d11 dxgi mfuuid ole32 oleaut32 uuid windowscodecs shell32 comdlg32
-  dwmapi wtsapi32 urlmon wininet propsys user32 gdi32 advapi32)
+  dwmapi wtsapi32 urlmon wininet propsys comctl32 user32 gdi32 advapi32)

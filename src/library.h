@@ -14,7 +14,17 @@ struct Wallpaper {
     int fps = 0;              // 0 = globale Einstellung
     double speed = 1.0;
     bool fromWallpaperEngine = false;
+    std::wstring iniPath;                          // wallpaper.ini oder leer (lose Dateien, Wallpaper Engine)
+    std::map<std::wstring, std::wstring> ini;      // Inhalt der wallpaper.ini, Schlüssel kleingeschrieben
 };
+
+// key=value-Zeilen; # und ; am Zeilenanfang sind Kommentare, ein ";" nach Leerraum beendet den Wert
+std::map<std::wstring, std::wstring> ParseIni(const std::string& text);
+
+// Setzt key=value in der ini-Datei: ersetzt die Zeile des Schlüssels (Groß-/Kleinschreibung egal) oder hängt sie an.
+// Alle anderen Zeilen, Kommentare und die Zeilenenden bleiben unverändert. False, wenn die Datei nicht geschrieben werden kann.
+std::string SetIniValueInText(const std::string& text, const std::wstring& key, const std::wstring& value);
+bool SetIniValue(const std::wstring& path, const std::wstring& key, const std::wstring& value);
 
 class Library {
 public:

@@ -7,6 +7,8 @@
 #include <mfreadwrite.h>
 #include <mferror.h>
 #include <algorithm>
+#include <cwctype>
+#include <sstream>
 
 // ---- Media Foundation dynamisch laden ------------------------------------------------
 // Windows-"N"-Editionen haben ohne Media Feature Pack kein MFPlat.dll. Lumen soll dort
@@ -61,6 +63,8 @@ cbuffer LumenConstants : register(b0) {
     float2 iChannelResolution; // Größe von iChannel0 (Bild/Video)
     float  iHour;              // lokale Uhrzeit 0..24 (z. B. 18.5 = 18:30)
     float  iFrame;
+    float4 lumenMap;           // intern: fragCoord = Bildpunkt * zw + xy (Panorama über mehrere Bildschirme)
+    float4 lumenParams[16];    // intern: Eigenschaften (// @param ...), per #define als Variablen sichtbar
 };
 Texture2D    iChannel0 : register(t0);
 SamplerState iSampler  : register(s0);
@@ -125,7 +129,7 @@ float3 L_hue(float h) {
 
 static const char* kEpilogue = R"HLSL(
 float4 PSMain(float4 lumenPos : SV_Position) : SV_Target {
-    float4 c = mainImage(lumenPos.xy);
+    float4 c = mainImage(lumenPos.xy * lumenMap.zw + lumenMap.xy);
     return float4(saturate(c.rgb), 1.0);
 }
 )HLSL";
@@ -161,6 +165,100 @@ float4 mainImage(float2 p) {
 )HLSL";
 
 const char* ShaderPrelude() { return kPrelude; }
+
+// ---- Eigenschaften -------------------------------------------------------------------
+static bool ParseNumber(std::wstring s, double& v) {
+    std::replace(s.begin(), s.end(), L',', L'.');   // "1,5" wie in Deutschland geschrieben
+    wchar_t* end = nullptr;
+    v = wcstod(s.c_str(), &end);
+    return end != s.c_str() && *end == 0;
+}
+
+static bool ParseHexColor(std::wstring s, float rgb[3]) {
+    s = Trim(s);
+    if (!s.empty() && s[0] == L'#') s.erase(0, 1);
+    if (s.size() != 6 || s.find_first_not_of(L"0123456789abcdefABCDEF") != std::wstring::npos) return false;
+    unsigned long v = wcstoul(s.c_str(), nullptr, 16);
+    rgb[0] = ((v >> 16) & 255) / 255.0f;
+    rgb[1] = ((v >> 8) & 255) / 255.0f;
+    rgb[2] = (v & 255) / 255.0f;
+    return true;
+}
+
+static bool IsIdentifier(const std::wstring& s) {
+    if (s.empty() || !(iswalpha(s[0]) || s[0] == L'_') || s[0] > 127) return false;
+    for (wchar_t c : s)
+        if (c > 127 || !(iswalnum(c) || c == L'_')) return false;
+    return true;
+}
+
+std::vector<ShaderParam> ParseShaderParams(const std::string& src) {
+    std::vector<ShaderParam> out;
+    std::wstringstream ss(Utf8ToWide(src));
+    std::wstring line;
+    while (std::getline(ss, line)) {
+        line = Trim(line);
+        if (line.compare(0, 2, L"//") != 0) continue;
+        line = Trim(line.substr(2));
+        if (line.compare(0, 7, L"@param ") != 0) continue;
+        std::wstringstream ts(line.substr(7));
+        ShaderParam p;
+        std::wstring type, def;
+        ts >> p.name >> type >> def;
+        type = ToLower(type);
+        bool ok = IsIdentifier(p.name) && !def.empty();
+        for (auto& o : out) ok = ok && o.name != p.name;
+        if (ok && type == L"color") {
+            p.color = true;
+            ok = ParseHexColor(def, p.def);
+        } else if (ok && type == L"float") {
+            std::wstring a, b;
+            double d = 0, lo = 0, hi = 0;
+            ts >> a >> b;
+            ok = ParseNumber(def, d) && ParseNumber(a, lo) && ParseNumber(b, hi) && lo < hi;
+            p.mn = (float)lo;
+            p.mx = (float)hi;
+            p.def[0] = (float)std::clamp(d, lo, hi);
+        } else ok = false;
+        if (!ok) {
+            Log(L"Eigenschaft ignoriert (Format: // @param name float Vorgabe min max Text | name color #RRGGBB Text): %s",
+                line.c_str());
+            continue;
+        }
+        std::getline(ts, p.label);
+        p.label = Trim(p.label);
+        if ((int)out.size() >= kMaxParams) {
+            Log(L"Mehr als %d Eigenschaften: '%s' ignoriert", kMaxParams, p.name.c_str());
+            break;
+        }
+        out.push_back(p);
+    }
+    return out;
+}
+
+void ParamValue(const ShaderParam& p, const std::map<std::wstring, std::wstring>& ini, float out[4]) {
+    out[0] = p.def[0];
+    out[1] = p.def[1];
+    out[2] = p.def[2];
+    out[3] = 0;
+    auto it = ini.find(L"param." + ToLower(p.name));
+    if (it == ini.end()) return;
+    if (p.color) {
+        float rgb[3];
+        if (ParseHexColor(it->second, rgb)) std::copy(rgb, rgb + 3, out);
+    } else {
+        double v;
+        if (ParseNumber(it->second, v)) out[0] = (float)std::clamp(v, (double)p.mn, (double)p.mx);
+    }
+}
+
+// Jede Eigenschaft wird zu einem Makro: tempo -> (lumenParams[0].x), farbe -> (lumenParams[1].xyz)
+static std::string ParamMacros(const std::vector<ShaderParam>& ps) {
+    std::string m;
+    for (size_t i = 0; i < ps.size(); i++)
+        m += "#define " + WideToUtf8(ps[i].name) + " (lumenParams[" + std::to_string(i) + "]." + (ps[i].color ? "xyz" : "x") + ")\n";
+    return m;
+}
 
 std::string DefaultMediaShader() {
     return "float4 mainImage(float2 fragCoord) { return texFit(fragCoord); }\n";
@@ -362,8 +460,8 @@ bool Gfx::CompileHlsl(const std::string& src, const char* entry, const char* tar
 
 std::shared_ptr<Program> Gfx::GetProgram(const std::string& user, int fitMode, std::wstring& err) {
     const char* target = fl_ >= D3D_FEATURE_LEVEL_11_0 ? "ps_5_0" : "ps_4_0";
-    std::string full = "#define LUMEN_FIT " + std::to_string(fitMode) + "\n" + kPrelude + "#line 1 \"wallpaper.hlsl\"\n" +
-                       user + "\n" + kEpilogue;
+    std::string full = "#define LUMEN_FIT " + std::to_string(fitMode) + "\n" + kPrelude + ParamMacros(ParseShaderParams(user)) +
+                       "#line 1 \"wallpaper.hlsl\"\n" + user + "\n" + kEpilogue;
     uint64_t key = Fnv1a(full + target);
     auto it = programs_.find(key);
     if (it != programs_.end()) {
@@ -501,6 +599,136 @@ public:
     int Height() const override { return h; }
 };
 
+// ---- Animiertes GIF: Einzelbilder werden bei Bedarf dekodiert und auf einer Leinwand zusammengesetzt ----------
+static bool QueryUInt(IWICMetadataQueryReader* q, const wchar_t* name, UINT& out) {
+    if (!q) return false;
+    PROPVARIANT v;
+    PropVariantInit(&v);
+    bool ok = SUCCEEDED(q->GetMetadataByName(name, &v));
+    if (ok) {
+        if (v.vt == VT_UI1) out = v.bVal;
+        else if (v.vt == VT_UI2) out = v.uiVal;
+        else if (v.vt == VT_UI4) out = v.ulVal;
+        else ok = false;
+    }
+    PropVariantClear(&v);
+    return ok;
+}
+
+class GifSource : public Source {
+public:
+    Gfx* gfx = nullptr;
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmapDecoder> dec;
+    ComPtr<ID3D11Texture2D> tex;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    UINT w = 0, h = 0, count = 0, index = 0;
+    std::vector<uint8_t> canvas, saved;   // BGRA (vormultipliziert); saved = Stand vor einem Bild mit Entsorgung "3"
+    RECT prevRect{};
+    UINT prevDisposal = 0;
+    bool hasPrev = false;
+    double nextAt = -1, speed = 1.0, delay = 0.1;
+
+    ID3D11ShaderResourceView* Srv() override { return srv.Get(); }
+    int Width() const override { return (int)w; }
+    int Height() const override { return (int)h; }
+    bool Animated() const override { return true; }
+    void SetSpeed(double s) override { speed = std::clamp(s, 0.1, 4.0); }
+    double NextChange() const override { return nextAt; }
+
+    // Zeigt Bild i (die Reihenfolge ist 0, 1, 2 ... dann wieder 0)
+    bool ShowFrame(UINT i) {
+        ComPtr<IWICBitmapFrameDecode> f;
+        if (FAILED(dec->GetFrame(i, &f))) return false;
+        ComPtr<IWICMetadataQueryReader> q;
+        f->GetMetadataQueryReader(&q);
+        UINT left = 0, top = 0, disposal = 0, cs = 10;
+        QueryUInt(q.Get(), L"/imgdesc/Left", left);
+        QueryUInt(q.Get(), L"/imgdesc/Top", top);
+        QueryUInt(q.Get(), L"/grctlext/Disposal", disposal);
+        QueryUInt(q.Get(), L"/grctlext/Delay", cs);
+        UINT fw = 0, fh = 0;
+        f->GetSize(&fw, &fh);
+        ComPtr<IWICFormatConverter> conv;
+        wic->CreateFormatConverter(&conv);
+        if (!fw || !fh || FAILED(conv->Initialize(f.Get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr, 0,
+                                                  WICBitmapPaletteTypeCustom)))
+            return false;
+        std::vector<uint8_t> px((size_t)fw * fh * 4);
+        if (FAILED(conv->CopyPixels(nullptr, fw * 4, (UINT)px.size(), px.data()))) return false;
+
+        // Das vorige Bild abräumen, wie es seine Entsorgung verlangt: 2 = Fläche leeren, 3 = Stand davor zurück
+        if (i == 0) {
+            std::fill(canvas.begin(), canvas.end(), 0);
+            hasPrev = false;
+        } else if (hasPrev) {
+            if (prevDisposal == 2) {
+                for (LONG y = prevRect.top; y < prevRect.bottom; y++)
+                    std::fill_n(&canvas[((size_t)y * w + prevRect.left) * 4], (size_t)(prevRect.right - prevRect.left) * 4, 0);
+            } else if (prevDisposal == 3) {
+                canvas = saved;
+            }
+        }
+        if (disposal == 3) saved = canvas;
+        for (UINT y = 0; y < fh && top + y < h; y++)
+            for (UINT x = 0; x < fw && left + x < w; x++) {
+                const uint8_t* s = &px[((size_t)y * fw + x) * 4];
+                if (s[3]) memcpy(&canvas[((size_t)(top + y) * w + left + x) * 4], s, 4);   // durchsichtige Punkte lassen alles stehen
+            }
+        prevRect = {(LONG)left, (LONG)top, (LONG)std::min(left + fw, w), (LONG)std::min(top + fh, h)};
+        prevDisposal = disposal;
+        hasPrev = true;
+        delay = cs <= 1 ? 0.1 : cs / 100.0;   // wie Browser: 0/1 hundertstel Sekunden gelten als 100 ms
+        gfx->Ctx()->UpdateSubresource(tex.Get(), 0, nullptr, canvas.data(), w * 4, 0);
+        index = i;
+        return true;
+    }
+
+    void Update(double now, bool active) override {
+        if (!active || count < 2) return;
+        if (nextAt < 0) {
+            nextAt = now + delay / speed;
+            return;
+        }
+        if (now < nextAt) return;
+        if (ShowFrame((index + 1) % count)) nextAt = std::max(nextAt + delay / speed, now);   // nach einer Pause nicht aufholen
+        else nextAt = now + 1;
+    }
+};
+
+static std::shared_ptr<Source> OpenGifSource(Gfx& gfx, IWICImagingFactory* wic, IWICBitmapDecoder* dec, UINT frames) {
+    auto g = std::make_shared<GifSource>();
+    g->gfx = &gfx;
+    g->wic = wic;
+    g->dec = dec;
+    g->count = frames;
+    ComPtr<IWICMetadataQueryReader> dq;
+    dec->GetMetadataQueryReader(&dq);
+    UINT w = 0, h = 0;
+    if (!QueryUInt(dq.Get(), L"/logscrdesc/Width", w) || !QueryUInt(dq.Get(), L"/logscrdesc/Height", h)) {
+        ComPtr<IWICBitmapFrameDecode> f;
+        if (FAILED(dec->GetFrame(0, &f))) return nullptr;
+        f->GetSize(&w, &h);
+    }
+    if (!w || !h || w > 4096 || h > 4096) return nullptr;   // riesige GIFs: als Standbild zeigen
+    g->w = w;
+    g->h = h;
+    g->canvas.assign((size_t)w * h * 4, 0);
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width = w;
+    td.Height = h;
+    td.MipLevels = 1;
+    td.ArraySize = 1;
+    td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    td.SampleDesc.Count = 1;
+    td.Usage = D3D11_USAGE_DEFAULT;
+    td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    if (FAILED(gfx.Dev()->CreateTexture2D(&td, nullptr, &g->tex))) return nullptr;
+    gfx.Dev()->CreateShaderResourceView(g->tex.Get(), nullptr, &g->srv);
+    if (!g->srv || !g->ShowFrame(0)) return nullptr;
+    return g;
+}
+
 std::shared_ptr<Source> LoadImageSource(Gfx& gfx, const std::wstring& path, std::wstring& err) {
     ComPtr<IWICImagingFactory> wic;
     if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic)))) {
@@ -512,6 +740,12 @@ std::shared_ptr<Source> LoadImageSource(Gfx& gfx, const std::wstring& path, std:
         err = L"Bild kann nicht geöffnet werden: " + FileNameOf(path);
         return nullptr;
     }
+    GUID container{};
+    UINT frames = 0;
+    dec->GetContainerFormat(&container);
+    dec->GetFrameCount(&frames);
+    if (container == GUID_ContainerFormatGif && frames > 1)
+        if (auto gif = OpenGifSource(gfx, wic.Get(), dec.Get(), frames)) return gif;
     ComPtr<IWICBitmapFrameDecode> frame;
     if (FAILED(dec->GetFrame(0, &frame))) { err = L"Bild ist leer"; return nullptr; }
     UINT w = 0, h = 0;

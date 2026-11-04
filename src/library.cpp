@@ -34,7 +34,7 @@ std::wstring SanitizeFileName(const std::wstring& s) {
     return r;
 }
 
-static std::map<std::wstring, std::wstring> ParseIni(const std::string& text) {
+std::map<std::wstring, std::wstring> ParseIni(const std::string& text) {
     std::map<std::wstring, std::wstring> kv;
     std::wstringstream ss(Utf8ToWide(text));
     std::wstring line;
@@ -43,9 +43,53 @@ static std::map<std::wstring, std::wstring> ParseIni(const std::string& text) {
         if (line.empty() || line[0] == L'#' || line[0] == L';' || line[0] == L'[') continue;
         size_t eq = line.find(L'=');
         if (eq == std::wstring::npos) continue;
-        kv[ToLower(Trim(line.substr(0, eq)))] = Trim(line.substr(eq + 1));
+        std::wstring value = line.substr(eq + 1);
+        // Kommentar hinter dem Wert ("fit=cover   ; Text"); ein ';' ohne Leerraum davor gehört zum Wert (Pfade)
+        size_t c = value.find_first_of(L";");
+        while (c != std::wstring::npos && c > 0 && value[c - 1] != L' ' && value[c - 1] != L'\t')
+            c = value.find_first_of(L";", c + 1);
+        if (c != std::wstring::npos) value.resize(c);
+        kv[ToLower(Trim(line.substr(0, eq)))] = Trim(value);
     }
     return kv;
+}
+
+std::string SetIniValueInText(const std::string& text, const std::wstring& key, const std::wstring& value) {
+    // Zeilenenden der Datei übernehmen; ohne vorhandenes Zeilenende gilt die Windows-Gewohnheit (CRLF)
+    const std::string eol = text.find('\n') != std::string::npos && text.find("\r\n") == std::string::npos ? "\n" : "\r\n";
+    const std::wstring wantKey = ToLower(key);
+    std::string out;
+    bool done = false;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t nl = text.find('\n', pos);
+        size_t end = nl == std::string::npos ? text.size() : nl;
+        std::string line = text.substr(pos, end - pos);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::wstring w = Trim(Utf8ToWide(line));
+        size_t eq = w.find(L'=');
+        bool isKey = !done && !w.empty() && w[0] != L'#' && w[0] != L';' && w[0] != L'[' && eq != std::wstring::npos &&
+                     ToLower(Trim(w.substr(0, eq))) == wantKey;
+        if (isKey) {
+            out += WideToUtf8(Trim(w.substr(0, eq)) + L"=" + value);
+            done = true;
+        } else {
+            out += line;
+        }
+        if (nl != std::string::npos) out += eol;
+        pos = nl == std::string::npos ? text.size() : nl + 1;
+    }
+    if (!done) {
+        if (!out.empty() && out.back() != '\n') out += eol;
+        out += WideToUtf8(key + L"=" + value) + eol;
+    }
+    return out;
+}
+
+bool SetIniValue(const std::wstring& path, const std::wstring& key, const std::wstring& value) {
+    std::string text;
+    ReadTextFile(path, text);
+    return WriteTextFile(path, SetIniValueInText(text, key, value));
 }
 
 static std::wstring ResolveIn(const std::wstring& dir, const std::wstring& p) {
@@ -110,6 +154,8 @@ void Library::ScanDir(const std::wstring& dir, const std::wstring& rel, int dept
         else if (!w.source.empty()) w.kind = WallKind::Image;
         else w.kind = WallKind::Shader;
         bool ok = (w.kind == WallKind::Shader) ? FileExists(w.shaderPath) : FileExists(w.source);
+        w.iniPath = ini;
+        w.ini = kv;
         if (ok) items_.push_back(w);
         else Log(L"Bibliothek: %s unvollständig (Datei fehlt)", rel.c_str());
         return;
@@ -242,7 +288,9 @@ void Library::WriteExamples() {
             // Unveränderte Kopie der Vorgängerfassung auffrischen – selbst bearbeitete Beispiele bleiben unangetastet
             std::wstring sh = JoinPath(dir, L"shader.hlsl");
             std::string cur;
-            if (ex.replaces && ReadTextFile(sh, cur) && Fnv1a(cur) == ex.replaces) {
+            bool unchanged = ReadTextFile(sh, cur) &&
+                             std::find(ex.replaces.begin(), ex.replaces.end(), Fnv1a(cur)) != ex.replaces.end();
+            if (unchanged) {
                 WriteTextFile(sh, ex.shader);
                 Log(L"Beispiel aktualisiert: %s", ex.folder);
             }

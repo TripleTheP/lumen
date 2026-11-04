@@ -5,6 +5,16 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 ## [Unveröffentlicht]
 
 ### Hinzugefügt
+- Einstellungsfenster mit Vorschaubildern: Raster aller Hintergründe, Regler und Farbfelder für Eigenschaften, alle Schalter des
+  Menüs. Linksklick auf das Tray-Symbol öffnet es (Rechtsklick: Menü wie bisher). Skaliert mit der Bildschirm-DPI.
+- Animierte GIFs (bisher wurde nur das erste Bild gezeigt): Teilbilder und alle Entsorgungsarten, Bilddauer aus der Datei,
+  gezeichnet wird nur bei fälligem Bildwechsel.
+- Zeitplan: Hintergrund nach Tageszeit (`zeitplan.txt`, Menü → Einstellungen → Zeitplan). Zeilen wie `06:00 | Beispiele\Aurora`,
+  gilt über Mitternacht, wird live neu geladen, eigene Wahl bleibt bis zum nächsten Wechsel.
+- Einstellbare Shader-Werte: `// @param tempo float 1.0 0.2 3.0 Text` im Shader, `param.tempo=2` in `wallpaper.ini`,
+  Menü → „Eigenschaften … ändern". Änderungen an der ini werden sofort übernommen. Die Aurora bietet Tempo, Helligkeit und zwei Farben.
+- Panorama: ein Hintergrund über mehrere Bildschirme (Menü → Einstellungen, `span=1`). Shader sehen den ganzen Desktop;
+  Klicks, Maus und Zeit laufen über die Bildschirmränder hinweg zusammen.
 - Pause bei Vollbild-Programmen (Spiel, Video): alle Bildschirme pausieren (`pause_fullscreen`, auch im Menü).
 - `shader_res`: reine Shader werden höchstens in 1080p berechnet und hochskaliert (Menü → Einstellungen → Renderauflösung).
 - `make DEBUG=1` (Debug-Build mit Symbolen) und `make test` (Selbsttest, `tests/selftest.cpp`).
@@ -17,6 +27,7 @@ Format nach [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen 
 - Auf einem 4K-Bildschirm sinkt die GPU-Last der Aurora von etwa 12 % auf 2 % (RTX 4070 Ti SUPER, 30 Bilder/s).
 
 ### Behoben
+- `wallpaper.ini`: Kommentare hinter einem Wert (`source=video.mp4 ; Text`) wurden als Teil des Werts gelesen.
 - Katalog-Pakete werden beim erneuten Installieren vollständig ersetzt, statt über den alten Ordner entpackt zu werden.
   Ist der Ordner gerade in Benutzung, bricht die Installation mit einer verständlichen Meldung ab.
 - Lumen beendet sich sauber auf `WM_CLOSE` (z. B. `taskkill /im Lumen.exe` ohne `/F`).

@@ -9,10 +9,15 @@ shader=shader.hlsl
 
 static const char* kAurora = R"HLSL(// Aurora – Nordlichter über Bergen.
 // Reagiert auf Musik (Bass macht die Lichter heller) und auf die Maus (sanfter Schein).
+// Einstellbar in wallpaper.ini (Menü → Eigenschaften), z. B. param.tempo=2
+// @param tempo float 1.0 0.2 3.0 Geschwindigkeit der Lichter
+// @param helligkeit float 1.0 0.3 2.0 Helligkeit der Lichter
+// @param farbe1 color #1AFF8C Farbe der Vorhänge (grün)
+// @param farbe2 color #8C4DFF Farbe an den oberen Rändern (violett)
 
 float4 mainImage(float2 fragCoord) {
     float2 uv = fragCoord / iResolution.y;          // Seitenverhältnis bleibt erhalten
-    float  t  = iTime * 0.04;
+    float  t  = iTime * 0.04 * tempo;
 
     // Berge zuerst: Was dahinter liegt, muss gar nicht berechnet werden (Grenzen aus dem Wertebereich von L_fbm)
     float hill = 2.0, hill2 = 2.0;
@@ -27,7 +32,7 @@ float4 mainImage(float2 fragCoord) {
         float s = L_hash(floor(fragCoord / 2.0));
         col += step(0.9982, s) * (0.5 + 0.5 * sin(iTime * 2.0 + s * 90.0)) * (1.0 - uv.y);
 
-        float energy = 0.55 + iAudio.x * 1.3 + iAudio.w * 0.4;
+        float energy = (0.55 + iAudio.x * 1.3 + iAudio.w * 0.4) * helligkeit;
 
         // Die Vorhänge reichen höchstens bis y = 0,63 herab
         if (uv.y < 0.64) {
@@ -38,7 +43,7 @@ float4 mainImage(float2 fragCoord) {
                 if (d > -0.015) {
                     float curtain = smoothstep(-0.015, 0.0, d) * exp(-max(d, 0.0) * (4.5 - band(k * 2) * 2.0));
                     float rays = 0.55 + 0.45 * L_fbm(float2(uv.x * 14.0 + t * 6.0 + fk * 9.0, uv.y * 1.5));
-                    float3 c = lerp(float3(0.1, 1.0, 0.55), float3(0.55, 0.3, 1.0), saturate(fk * 0.4 + 0.3 * sin(t * 4.0 + uv.x * 1.5)));
+                    float3 c = lerp(farbe1, farbe2, saturate(fk * 0.4 + 0.3 * sin(t * 4.0 + uv.x * 1.5)));
                     col += c * curtain * rays * 0.33 * energy;
                 }
             }
@@ -217,12 +222,17 @@ static const char* kTemplate = R"HLSL(// Mein Shader – Vorlage
 //   texFit(fragCoord)  Bild/Video passend eingepasst
 // Helfer: L_hash, L_noise, L_fbm, L_hue
 //
+// Einstellbare Werte: Eine Zeile "// @param Name float Vorgabe Min Max Beschriftung" oder
+// "// @param Name color #RRGGBB Beschriftung" macht Name zu einer Variablen. Geändert wird sie in der
+// wallpaper.ini (param.Name=2.0), am bequemsten über Menü -> "Eigenschaften ... ändern".
+// @param tempo float 1.0 0.2 3.0 Geschwindigkeit der Farben
+//
 // Tipp: Code von shadertoy.com lässt sich meist übertragen: vec2 -> float2, mix -> lerp,
 // fract -> frac, mod -> fmod. Achtung: dort ist y = 0 unten, hier oben.
 
 float4 mainImage(float2 fragCoord) {
     float2 uv = fragCoord / iResolution;
-    float3 col = 0.5 + 0.5 * cos(iTime * 0.5 + uv.xyx * 3.0 + float3(0, 2, 4));
+    float3 col = 0.5 + 0.5 * cos(iTime * 0.5 * tempo + uv.xyx * 3.0 + float3(0, 2, 4));
     col *= 0.6 + 0.6 * iAudio.x;                         // pulsiert mit dem Bass
 
     float d = length((fragCoord - iMouse.xy) / iResolution.y);
@@ -237,7 +247,7 @@ static const char* kReadme = R"(Lumen – Bibliothek
 Alles, was in diesem Ordner liegt, erscheint im Lumen-Menü (Rechtsklick auf das Tray-Symbol).
 
 1) Einfach Dateien hineinlegen
-   Bilder: jpg, png, bmp, webp, gif (erstes Bild)
+   Bilder: jpg, png, bmp, webp, gif (auch animiert)
    Videos: mp4, webm, mkv, mov, wmv, avi (was Windows abspielen kann, ohne Ton)
    Shader: .hlsl-Dateien mit einer Funktion mainImage
 
@@ -247,6 +257,7 @@ Alles, was in diesem Ordner liegt, erscheint im Lumen-Menü (Rechtsklick auf das
    shader=shader.hlsl        (optional, eigener Effekt; ohne: Bild/Video wird eingepasst)
    fit=cover                 (cover | contain | stretch)
    fps=30                    (optional, Obergrenze für diesen Hintergrund)
+   param.tempo=2             (optional, Werte, die der Shader mit "// @param" anbietet; Menü: "Eigenschaften ändern")
    speed=1.0                 (Wiedergabetempo bei Videos)
 
 Unterordner werden im Menü als Gruppen angezeigt.
@@ -255,7 +266,7 @@ Shader-Dateien werden beim Speichern automatisch neu geladen.
 
 const std::vector<ExampleWallpaper>& Examples() {
     static const std::vector<ExampleWallpaper> v = {
-        {L"Aurora", kAuroraIni, kAurora, 0x08B56E4257ADAA2Dull},   // 0.1.0
+        {L"Aurora", kAuroraIni, kAurora, {0x08B56E4257ADAA2Dull /* 0.1.0 */, 0x58AC55185284F3FDull /* optimiert */}},
         {L"Punktfeld", kDotsIni, kDots},
         {L"Spektrum", kSpectrumIni, kSpectrum},
         {L"Tag und Nacht", kDayNightIni, kDayNight},

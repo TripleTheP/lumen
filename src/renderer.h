@@ -6,6 +6,8 @@
 #include <mfobjects.h>
 
 
+constexpr int kMaxParams = 16;   // einstellbare Werte pro Shader (muss zu lumenParams im Prelude passen)
+
 // Werte, die jeder Shader bekommt (muss zum cbuffer im Prelude passen, 16-Byte-ausgerichtet)
 struct ShaderConstants {
     float resolution[2];
@@ -18,6 +20,10 @@ struct ShaderConstants {
     float channelRes[2];
     float hour;
     float frame;
+    // fragCoord = Bildpunkt * map.zw + map.xy. Normal (0, 0, 1, 1); im Panorama liegt jeder Bildschirm an seiner
+    // Stelle im gemeinsamen Desktop-Rechteck, unabhängig von seiner Renderauflösung.
+    float map[4] = {0, 0, 1, 1};
+    float params[kMaxParams][4] = {};   // Eigenschaften (siehe ShaderParam), Nummer = Reihenfolge im Shader
 };
 static_assert(sizeof(ShaderConstants) % 16 == 0, "cbuffer muss 16-Byte-ausgerichtet sein");
 
@@ -34,11 +40,29 @@ public:
     // Einmal pro Frame; active = mindestens ein Bildschirm zeigt die Quelle gerade
     virtual void Update(double /*now*/, bool /*active*/) {}
     virtual void SetSpeed(double) {}
+    // Zeitpunkt (NowSeconds), zu dem sich der Inhalt das nächste Mal ändert; 0 = unbekannt/ständig. Erlaubt, zwischen
+    // zwei Bildern nichts zu zeichnen (GIF mit 100 ms pro Bild braucht keine 30 Zeichenvorgänge pro Sekunde).
+    virtual double NextChange() const { return 0; }
     uint64_t lastFrameId = 0;
 };
 
 std::shared_ptr<Source> LoadImageSource(Gfx& gfx, const std::wstring& path, std::wstring& err);
 std::shared_ptr<Source> OpenVideoSource(Gfx& gfx, const std::wstring& path, std::wstring& err);
+
+// ---- Eigenschaften: Werte, die man in wallpaper.ini einstellen kann ---------------------
+// Ein Shader deklariert sie in Kommentaren und benutzt sie danach wie Variablen:
+//   // @param tempo float 1.0 0.2 3.0 Geschwindigkeit     (Vorgabe, kleinster, größter Wert, Beschriftung)
+//   // @param farbe color #19FF8C Hauptfarbe
+// In wallpaper.ini steht der Wert dann als  param.tempo=2.0  bzw.  param.farbe=#FF8800
+struct ShaderParam {
+    std::wstring name, label;
+    bool color = false;
+    float def[3] = {0, 0, 0};   // Vorgabe: Zahl in [0], Farbe als rgb 0..1
+    float mn = 0, mx = 1;       // Zahlenbereich
+};
+std::vector<ShaderParam> ParseShaderParams(const std::string& shaderSource);
+// Aktueller Wert (aus ini, sonst Vorgabe; Zahlen auf mn..mx begrenzt). ini-Schlüssel sind kleingeschrieben.
+void ParamValue(const ShaderParam& p, const std::map<std::wstring, std::wstring>& ini, float out[4]);
 
 // ---- Kompilierte Shader --------------------------------------------------------
 struct Program {

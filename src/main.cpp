@@ -7,6 +7,9 @@
 #include "audio.h"
 #include "renderer.h"
 #include "library.h"
+#include "schedule.h"
+#include "commands.h"
+#include "settings.h"
 #include <shellapi.h>
 #include <commdlg.h>
 #include <wtsapi32.h>
@@ -24,17 +27,9 @@ enum : UINT {
     WM_APP_INSTALLED,
     WM_APP_HELLO,
     WM_APP_SCREENPAINT,
+    WM_APP_SETTINGS_CLOSED,
 };
 
-enum : UINT {
-    ID_PAUSE = 10, ID_ADDFILE, ID_NEWSHADER, ID_OPENLIB, ID_EXIT, ID_AUTOSTART, ID_BATTERY, ID_AUDIO, ID_WE,
-    ID_OPENCONFIG, ID_CAT_REFRESH, ID_RELOAD, ID_ABOUT, ID_FULLSCREEN, ID_SHADER_RES,
-    ID_FPS_BASE = 100,        // +fps
-    ID_SCALE_BASE = 400,      // +Prozent
-    ID_CAT_BASE = 1000,       // +Index
-    ID_ALL_BASE = 3000,       // +Index (999 = kein Live-Hintergrund)
-    ID_SCREEN_BASE = 10000,   // +Bildschirm*1000 + Index
-};
 static const int kNone = 999;
 
 static const UINT TIMER_CHECK = 1, TIMER_REBUILD = 2;
@@ -51,7 +46,9 @@ struct Screen {
     bool hasWall = false;
     std::shared_ptr<Source> src;
     std::shared_ptr<Program> prog;
-    FILETIME shaderTime{};
+    FILETIME shaderTime{}, iniTime{};
+    std::vector<ShaderParam> params;   // Eigenschaften des Shaders (// @param ...)
+    float pv[kMaxParams][4] = {};      // ihre aktuellen Werte
     bool covered = false, dirty = true, srcDropped = false;
     double lastRender = -1, startTime = 0;
     float clickX = 0, clickY = 0;
@@ -113,6 +110,8 @@ private:
     void DestroyScreenWindow(Screen& s);
     void LoadWallpaper(Screen& s, const std::wstring& id);
     std::wstring AssignedId(const MonitorInfo& m) const;
+    bool SpanActive() const { return screens_.size() > 1 && cfg_.GetBool(L"span", false); }
+    RECT SpanBox() const;   // kleinstes Rechteck um alle Bildschirme (physische Pixel)
     void ApplyId(Screen& s, const std::wstring& id);
     void SetAll(const std::wstring& id);
     void SetScreen(size_t i, const std::wstring& id);
@@ -142,6 +141,12 @@ private:
     void RefreshCatalog();
     void InstallCatalog(size_t idx);
     void OpenConfig();
+    void OpenSettings();
+    bool MenuChecked(UINT id) const;   // Zustand eines Schalters (Menü und Einstellungsfenster)
+    void UpdateSchedule();   // wechselt den Hintergrund, wenn laut Zeitplan ein neuer Abschnitt beginnt
+    void EditSchedule();
+    const Screen* PropertyScreen() const;   // erster Bildschirm, dessen Hintergrund einstellbare Werte hat
+    void EditProperties();
     void Quit();
 
     HINSTANCE inst_ = nullptr;
@@ -168,6 +173,14 @@ private:
     bool trimmed_ = false;
     double lastActive_ = 0, lastRecheck_ = 0;
     uint64_t frameId_ = 0;
+
+    // Zeitplan (zeitplan.txt): scheduled_ ist der Hintergrund des aktuellen Abschnitts; wählt man selbst einen,
+    // bleibt der bis zum nächsten Abschnitt (scheduleHeld_)
+    std::unique_ptr<SettingsWindow> settings_;
+    std::vector<ScheduleEntry> plan_;
+    FILETIME planTime_{};
+    std::wstring scheduled_, slotKey_;
+    bool scheduleHeld_ = false;
 
     std::mutex catMtx_;
     std::vector<CatalogItem> catalog_;
@@ -227,6 +240,7 @@ int App::Run(HINSTANCE inst, const std::wstring& cmdFile) {
                             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     host_.Attach(cfg_.GetBool(L"desktop_layered", false));
+    UpdateSchedule();   // vor den Bildschirmen, damit gleich der Hintergrund der aktuellen Tageszeit erscheint
     BuildScreens();
     SetTimer(msgWnd_, TIMER_CHECK, 1000, nullptr);
     PeriodicCheck();
@@ -267,6 +281,8 @@ int App::Run(HINSTANCE inst, const std::wstring& cmdFile) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) { running_ = false; break; }
+            // Tab, Pfeiltasten und Esc im Einstellungsfenster
+            if (settings_ && settings_->Hwnd() && IsDialogMessageW(settings_->Hwnd(), &msg)) continue;
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -310,7 +326,14 @@ LRESULT App::HandleMsg(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     switch (m) {
     case WM_TRAY:
-        if (LOWORD(l) == WM_RBUTTONUP || LOWORD(l) == WM_LBUTTONUP || LOWORD(l) == WM_CONTEXTMENU) ShowMenu();
+        if (LOWORD(l) == WM_LBUTTONUP) OpenSettings();   // Linksklick: Fenster mit Vorschau, Rechtsklick: Menü
+        else if (LOWORD(l) == WM_RBUTTONUP || LOWORD(l) == WM_CONTEXTMENU) ShowMenu();
+        return 0;
+    case WM_APP_SETTINGS_CLOSED:
+        if (settings_ && !settings_->Hwnd()) {   // (war er inzwischen wieder geöffnet, bleibt er)
+            settings_.reset();
+            TrimMemory();
+        }
         return 0;
     case WM_TIMER:
         if (w == TIMER_CHECK) PeriodicCheck();
@@ -412,8 +435,21 @@ LRESULT App::HandleMsg(HWND h, UINT m, WPARAM w, LPARAM l) {
 // =====================================================================================
 //  Bildschirme
 // =====================================================================================
+RECT App::SpanBox() const {
+    RECT box{LONG_MAX, LONG_MAX, LONG_MIN, LONG_MIN};
+    for (auto& s : screens_) {
+        box.left = std::min(box.left, s.mon.rc.left);
+        box.top = std::min(box.top, s.mon.rc.top);
+        box.right = std::max(box.right, s.mon.rc.right);
+        box.bottom = std::max(box.bottom, s.mon.rc.bottom);
+    }
+    return box;
+}
+
 std::wstring App::AssignedId(const MonitorInfo& m) const {
-    std::wstring id = cfg_.Get(L"screen." + m.device);
+    if (!scheduled_.empty() && !scheduleHeld_) return scheduled_;
+    // Im Panorama zeigen alle Bildschirme denselben Hintergrund; einzeln gewählte bleiben für später gespeichert
+    std::wstring id = SpanActive() ? L"" : cfg_.Get(L"screen." + m.device);
     if (id.empty()) id = cfg_.Get(L"default");
     if (id.empty()) id = L"Beispiele\\Aurora";
     return id;
@@ -519,6 +555,9 @@ void App::LoadWallpaper(Screen& s, const std::wstring& id) {
     }
     s.wp = *w;
     s.hasWall = true;
+    s.params.clear();
+    memset(s.pv, 0, sizeof(s.pv));
+    if (!w->iniPath.empty()) s.iniTime = LastWrite(w->iniPath);
 
     std::wstring err;
     if (w->kind == WallKind::Image || w->kind == WallKind::Video) {
@@ -538,6 +577,8 @@ void App::LoadWallpaper(Screen& s, const std::wstring& id) {
             return;
         }
         s.shaderTime = LastWrite(w->shaderPath);
+        s.params = ParseShaderParams(code);
+        for (size_t i = 0; i < s.params.size(); i++) ParamValue(s.params[i], w->ini, s.pv[i]);
     } else {
         code = DefaultMediaShader();
     }
@@ -571,6 +612,7 @@ void App::ApplyId(Screen& s, const std::wstring& id) {
 }
 
 void App::SetAll(const std::wstring& id) {
+    scheduleHeld_ = true;   // eigene Wahl gilt bis zum nächsten Abschnitt des Zeitplans
     cfg_.Set(L"default", id);
     for (auto& s : screens_) cfg_.Remove(L"screen." + s.mon.device);
     cfg_.Save();
@@ -580,6 +622,7 @@ void App::SetAll(const std::wstring& id) {
 
 void App::SetScreen(size_t i, const std::wstring& id) {
     if (i >= screens_.size()) return;
+    scheduleHeld_ = true;
     cfg_.Set(L"screen." + screens_[i].mon.device, id);
     cfg_.Save();
     ApplyId(screens_[i], id);
@@ -621,11 +664,19 @@ double App::RenderDue(double now) {
     bool pressed = ((down && !prevDown_) || (ks & 1)) && over;
     prevDown_ = down;
     if (pressed) {
+        RECT box = SpanBox();
+        bool span = SpanActive();
         for (auto& s : screens_) {
-            if (!PtInRect(&s.mon.rc, cur)) continue;
-            double sc = s.rw / double(std::max(1L, s.mon.rc.right - s.mon.rc.left));
-            s.clickX = float((cur.x - s.mon.rc.left) * sc);
-            s.clickY = float((cur.y - s.mon.rc.top) * sc);
+            if (span) {
+                // Ein Klick gilt für das ganze Panorama, damit z. B. die Welle über Bildschirmränder weiterläuft
+                s.clickX = float(cur.x - box.left);
+                s.clickY = float(cur.y - box.top);
+            } else {
+                if (!PtInRect(&s.mon.rc, cur)) continue;
+                double sc = s.rw / double(std::max(1L, s.mon.rc.right - s.mon.rc.left));
+                s.clickX = float((cur.x - s.mon.rc.left) * sc);
+                s.clickY = float((cur.y - s.mon.rc.top) * sc);
+            }
             s.clickTime = now;
             s.clickCount++;
         }
@@ -641,6 +692,11 @@ double App::RenderDue(double now) {
         int fps = cfg_.Fps();
         if (s.wp.fps > 0) fps = std::min(fps, s.wp.fps);
         double t = s.dirty ? now : s.lastRender + 1.0 / fps;
+        // Quelle mit eigenem Takt (GIF): erst zeichnen, wenn ein neues Bild fällig ist, außer der Shader bewegt sich selbst
+        if (!s.dirty && s.src && !(s.prog && s.prog->usesTime)) {
+            double change = s.src->NextChange();
+            if (change > 0) t = std::max(t, change);
+        }
         if (t <= now + 0.001) {
             due.push_back(&s);
             t = now + 1.0 / fps;
@@ -667,17 +723,35 @@ double App::RenderDue(double now) {
 void App::RenderScreen(Screen& s, double now, const AudioFrame& af, POINT cur, bool over, bool down) {
     if (!s.rtv) return;
     ShaderConstants c{};
-    c.resolution[0] = (float)s.rw;
-    c.resolution[1] = (float)s.rh;
+    bool span = SpanActive();
+    // Panorama: alle Bildschirme teilen eine Startzeit, sonst laufen die Animationen an den Rändern auseinander
+    double start = span ? screens_[0].startTime : s.startTime;
     // float ist bei 86400 s nur noch ~8 ms genau (Animation ruckelt), bei 3600 s ~0,24 ms – dafür ein Sprung pro Stunde
-    c.time = (float)std::fmod(now - s.startTime, 3600.0);
+    c.time = (float)std::fmod(now - start, 3600.0);
     c.timeDelta = s.lastRender < 0 ? 0.0f : (float)std::min(now - s.lastRender, 1.0);
-    double sc = s.rw / double(std::max(1L, s.mon.rc.right - s.mon.rc.left));
-    bool onThis = PtInRect(&s.mon.rc, cur) != 0;
-    c.mouse[0] = float((cur.x - s.mon.rc.left) * sc);
-    c.mouse[1] = float((cur.y - s.mon.rc.top) * sc);
-    c.mouse[2] = (onThis && over && down) ? 1.0f : 0.0f;
-    c.mouse[3] = (onThis && over) ? 1.0f : 0.0f;
+    if (span) {
+        // Shader sehen den ganzen Desktop in physischen Pixeln; dieser Bildschirm liegt an seiner Stelle darin
+        RECT box = SpanBox();
+        c.resolution[0] = (float)(box.right - box.left);
+        c.resolution[1] = (float)(box.bottom - box.top);
+        c.map[0] = (float)(s.mon.rc.left - box.left);
+        c.map[1] = (float)(s.mon.rc.top - box.top);
+        c.map[2] = (float)(s.mon.rc.right - s.mon.rc.left) / s.rw;
+        c.map[3] = (float)(s.mon.rc.bottom - s.mon.rc.top) / s.rh;
+        c.mouse[0] = (float)(cur.x - box.left);
+        c.mouse[1] = (float)(cur.y - box.top);
+        c.mouse[2] = (over && down) ? 1.0f : 0.0f;
+        c.mouse[3] = over ? 1.0f : 0.0f;
+    } else {
+        c.resolution[0] = (float)s.rw;
+        c.resolution[1] = (float)s.rh;
+        double sc = s.rw / double(std::max(1L, s.mon.rc.right - s.mon.rc.left));
+        bool onThis = PtInRect(&s.mon.rc, cur) != 0;
+        c.mouse[0] = float((cur.x - s.mon.rc.left) * sc);
+        c.mouse[1] = float((cur.y - s.mon.rc.top) * sc);
+        c.mouse[2] = (onThis && over && down) ? 1.0f : 0.0f;
+        c.mouse[3] = (onThis && over) ? 1.0f : 0.0f;
+    }
     c.audio[0] = af.bass;
     c.audio[1] = af.mid;
     c.audio[2] = af.treble;
@@ -696,6 +770,7 @@ void App::RenderScreen(Screen& s, double now, const AudioFrame& af, POINT cur, b
     double hourOverride = cfg_.GetFloat(L"debug_hour", -1);
     c.hour = hourOverride >= 0 ? (float)hourOverride : lt.wHour + lt.wMinute / 60.0f + lt.wSecond / 3600.0f;
     c.frame = (float)(frameId_ % 1000000);
+    memcpy(c.params, s.pv, sizeof(c.params));
 
     gfx_.Draw(s.rtv.Get(), s.rw, s.rh, s.prog.get(), s.src.get(), c);
     HRESULT hr = s.sc->Present(0, 0);
@@ -750,14 +825,24 @@ void App::PeriodicCheck() {
         BuildScreens();
     }
 
+    UpdateSchedule();
     CheckCoverage();
 
-    // Shader live neu laden, wenn die Datei gespeichert wurde
+    // Shader oder wallpaper.ini live neu laden, wenn die Datei gespeichert wurde
     for (auto& s : screens_) {
-        if (!s.hasWall || s.wp.shaderPath.empty()) continue;
-        FILETIME t = LastWrite(s.wp.shaderPath);
-        if (CompareFileTime(&t, &s.shaderTime) != 0) {
-            Log(L"Shader geändert: %s", s.wp.shaderPath.c_str());
+        if (!s.hasWall) continue;
+        bool changed = false;
+        if (!s.wp.shaderPath.empty()) {
+            FILETIME t = LastWrite(s.wp.shaderPath);
+            changed = CompareFileTime(&t, &s.shaderTime) != 0;
+        }
+        if (!s.wp.iniPath.empty()) {
+            FILETIME t = LastWrite(s.wp.iniPath);
+            changed = changed || CompareFileTime(&t, &s.iniTime) != 0;
+        }
+        if (changed) {
+            Log(L"Geändert, lade neu: %s", s.wp.id.c_str());
+            lib_.Scan(cfg_.GetBool(L"wallpaper_engine", true));   // neue Werte aus der ini übernehmen
             LoadWallpaper(s, s.wallId);
         }
     }
@@ -852,7 +937,12 @@ void App::ShowMenu() {
     for (auto& s : screens_)
         if (s.wallId != common) common.clear();
 
-    if (screens_.size() > 1) {
+    AppendMenuW(m, MF_STRING, ID_SETTINGS, L"Hintergründe und Einstellungen…");
+    SetMenuDefaultItem(m, ID_SETTINGS, FALSE);   // fett: das macht auch ein Linksklick auf das Symbol
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    if (SpanActive()) {
+        AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildWallMenu(ID_ALL_BASE, common), L"Hintergrund (Panorama über alle Bildschirme)");
+    } else if (screens_.size() > 1) {
         AppendMenuW(m, MF_POPUP, (UINT_PTR)BuildWallMenu(ID_ALL_BASE, common), L"Hintergrund für alle Bildschirme");
         for (size_t i = 0; i < screens_.size() && i < 16; i++) {
             auto& s = screens_[i];
@@ -867,6 +957,8 @@ void App::ShowMenu() {
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_ADDFILE, L"Bild oder Video hinzufügen…");
     AppendMenuW(m, MF_STRING, ID_NEWSHADER, L"Eigenen Shader erstellen…");
+    if (const Screen* ps = PropertyScreen())
+        AppendMenuW(m, MF_STRING, ID_PROPS, (L"Eigenschaften von „" + MenuText(ps->wp.name) + L"“ ändern…").c_str());
     AppendMenuW(m, MF_STRING, ID_OPENLIB, L"Bibliothek öffnen");
 
     HMENU cat = CreatePopupMenu();
@@ -893,23 +985,25 @@ void App::ShowMenu() {
     int curScale = (int)std::lround(cfg_.RenderScale() * 100);
     for (int p : {100, 75, 50})
         AppendMenuW(scl, MF_STRING | (curScale == p ? MF_CHECKED : 0), ID_SCALE_BASE + p, (std::to_wstring(p) + L" %").c_str());
+    auto check = [&](HMENU menu, UINT id, const wchar_t* text) {
+        AppendMenuW(menu, MF_STRING | (MenuChecked(id) ? MF_CHECKED : 0), id, text);
+    };
     AppendMenuW(scl, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(scl, MF_STRING | (cfg_.GetInt(L"shader_res", 1080) > 0 ? MF_CHECKED : 0), ID_SHADER_RES,
-                L"Shader höchstens in 1080p berechnen (spart GPU)");
+    check(scl, ID_SHADER_RES, L"Shader höchstens in 1080p berechnen (spart GPU)");
     AppendMenuW(set, MF_POPUP, (UINT_PTR)scl, L"Renderauflösung");
-    AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"pause_on_battery", true) ? MF_CHECKED : 0), ID_BATTERY,
-                L"Im Akkubetrieb und Energiesparmodus pausieren");
-    AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"pause_fullscreen", true) ? MF_CHECKED : 0), ID_FULLSCREEN,
-                L"Bei Vollbild-Programmen alle Bildschirme pausieren");
-    AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"audio", true) ? MF_CHECKED : 0), ID_AUDIO, L"Auf Musik reagieren");
-    AppendMenuW(set, MF_STRING | (cfg_.GetBool(L"wallpaper_engine", true) ? MF_CHECKED : 0), ID_WE,
-                L"Videos aus Wallpaper Engine anzeigen");
-    AppendMenuW(set, MF_STRING | (AutostartEnabled() ? MF_CHECKED : 0), ID_AUTOSTART, L"Mit Windows starten");
+    check(set, ID_BATTERY, L"Im Akkubetrieb und Energiesparmodus pausieren");
+    check(set, ID_FULLSCREEN, L"Bei Vollbild-Programmen alle Bildschirme pausieren");
+    if (screens_.size() > 1 || MenuChecked(ID_SPAN)) check(set, ID_SPAN, L"Ein Hintergrund über alle Bildschirme (Panorama)");
+    check(set, ID_SCHEDULE, L"Zeitplan: Hintergrund nach Tageszeit");
+    AppendMenuW(set, MF_STRING, ID_EDITSCHEDULE, L"Zeitplan bearbeiten…");
+    check(set, ID_AUDIO, L"Auf Musik reagieren");
+    check(set, ID_WE, L"Videos aus Wallpaper Engine anzeigen");
+    check(set, ID_AUTOSTART, L"Mit Windows starten");
     AppendMenuW(set, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(set, MF_STRING, ID_OPENCONFIG, L"Einstellungsdatei öffnen");
     AppendMenuW(set, MF_STRING, ID_RELOAD, L"Neu laden");
     AppendMenuW(m, MF_POPUP, (UINT_PTR)set, L"Einstellungen");
-    AppendMenuW(m, MF_STRING | (userPaused_ ? MF_CHECKED : 0), ID_PAUSE, L"Pausieren");
+    check(m, ID_PAUSE, L"Pausieren");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, ID_ABOUT, L"Über Lumen");
     AppendMenuW(m, MF_STRING, ID_EXIT, L"Beenden");
@@ -957,6 +1051,24 @@ void App::OnCommand(UINT id) {
         UpdateAudioNeed();
         break;
     case ID_ADDFILE: AddFileDialog(); break;
+    case ID_SETTINGS: OpenSettings(); break;
+    case ID_PROPS: EditProperties(); break;
+    case ID_EDITSCHEDULE: EditSchedule(); break;
+    case ID_SCHEDULE:
+        cfg_.SetBool(L"schedule", !cfg_.GetBool(L"schedule", false));
+        cfg_.Save();
+        slotKey_.clear();
+        scheduled_.clear();
+        scheduleHeld_ = false;
+        plan_.clear();
+        planTime_ = {};   // Datei neu lesen
+        if (cfg_.GetBool(L"schedule", false)) {
+            UpdateSchedule();
+            if (scheduled_.empty()) Balloon(L"Zeitplan", L"Noch keine Einträge: Menü → Einstellungen → Zeitplan bearbeiten.");
+        } else {
+            BuildScreens();   // zurück zum gewählten Hintergrund
+        }
+        break;
     case ID_NEWSHADER: {
         std::wstring nid, file;
         if (lib_.CreateShaderTemplate(nid, file)) {
@@ -975,6 +1087,11 @@ void App::OnCommand(UINT id) {
         cfg_.SetInt(L"shader_res", cfg_.GetInt(L"shader_res", 1080) > 0 ? 0 : 1080);
         cfg_.Save();
         ResizeAll();
+        break;
+    case ID_SPAN:
+        cfg_.SetBool(L"span", !cfg_.GetBool(L"span", false));
+        cfg_.Save();
+        BuildScreens();   // lädt die Hintergründe nach der neuen Zuordnung neu
         break;
     case ID_FULLSCREEN:
         cfg_.SetBool(L"pause_fullscreen", !cfg_.GetBool(L"pause_fullscreen", true));
@@ -1024,6 +1141,190 @@ void App::AddFileAndApply(const std::wstring& path) {
     }
     lib_.Scan(cfg_.GetBool(L"wallpaper_engine", true));
     SetAll(nid);
+}
+
+bool App::MenuChecked(UINT id) const {
+    switch (id) {
+    case ID_BATTERY: return cfg_.GetBool(L"pause_on_battery", true);
+    case ID_FULLSCREEN: return cfg_.GetBool(L"pause_fullscreen", true);
+    case ID_AUDIO: return cfg_.GetBool(L"audio", true);
+    case ID_SHADER_RES: return cfg_.GetInt(L"shader_res", 1080) > 0;
+    case ID_SPAN: return cfg_.GetBool(L"span", false);
+    case ID_SCHEDULE: return cfg_.GetBool(L"schedule", false);
+    case ID_WE: return cfg_.GetBool(L"wallpaper_engine", true);
+    case ID_AUTOSTART: return AutostartEnabled();
+    case ID_PAUSE: return userPaused_;
+    }
+    return false;
+}
+
+void App::OpenSettings() {
+    if (!settings_) {
+        SettingsContext c;
+        c.cfg = &cfg_;
+        c.gfx = &gfx_;
+        c.command = [this](UINT id) { OnCommand(id); };
+        c.checked = [this](UINT id) { return MenuChecked(id); };
+        c.items = [this] {
+            lib_.Scan(cfg_.GetBool(L"wallpaper_engine", true));
+            return lib_.Items();
+        };
+        c.screens = [this] {
+            std::vector<SettingsScreen> out;
+            for (size_t i = 0; i < screens_.size(); i++) {
+                auto& s = screens_[i];
+                wchar_t label[96];
+                swprintf(label, 96, L"Bildschirm %d (%dx%d)%s", (int)i + 1, (int)(s.mon.rc.right - s.mon.rc.left),
+                         (int)(s.mon.rc.bottom - s.mon.rc.top), s.mon.primary ? L", Haupt" : L"");
+                out.push_back({label, s.wallId});
+            }
+            return out;
+        };
+        c.select = [this](int screen, const std::wstring& id) {
+            if (screen < 0) SetAll(id);
+            else SetScreen((size_t)screen, id);
+        };
+        c.props = [this](std::wstring& name) {
+            std::vector<SettingsProp> out;
+            const Screen* ps = PropertyScreen();
+            if (!ps) {
+                for (auto& s : screens_)
+                    if (s.hasWall) { name = s.wp.name; break; }
+                return out;
+            }
+            name = ps->wp.name;
+            for (size_t i = 0; i < ps->params.size(); i++) {
+                SettingsProp p;
+                p.p = ps->params[i];
+                memcpy(p.v, ps->pv[i], sizeof(p.v));
+                out.push_back(p);
+            }
+            return out;
+        };
+        c.setProp = [this](const std::wstring& name, const std::wstring& value, bool final) {
+            const Screen* ps = PropertyScreen();
+            if (!ps) return;
+            std::wstring wallId = ps->wallId, ini = ps->wp.iniPath, key = L"param." + ToLower(name);
+            size_t idx = ps->params.size();
+            for (size_t i = 0; i < ps->params.size(); i++)
+                if (ps->params[i].name == name) idx = i;
+            if (idx == ps->params.size()) return;
+            float v[4];
+            ParamValue(ps->params[idx], {{key, value}}, v);
+            // Sofort anzeigen, ohne den Hintergrund neu zu laden (das würde die Animation neu starten)
+            for (auto& s : screens_)
+                if (s.hasWall && s.wallId == wallId && idx < s.params.size()) {
+                    memcpy(s.pv[idx], v, sizeof(v));
+                    s.wp.ini[key] = value;
+                    s.dirty = true;
+                }
+            if (!final) return;
+            SetIniValue(ini, L"param." + name, value);
+            lib_.Scan(cfg_.GetBool(L"wallpaper_engine", true));
+            FILETIME t = LastWrite(ini);   // damit die Dateiüberwachung nicht noch einmal neu lädt
+            for (auto& s : screens_)
+                if (s.hasWall && s.wallId == wallId) s.iniTime = t;
+        };
+        c.closed = [this] { PostMessageW(msgWnd_, WM_APP_SETTINGS_CLOSED, 0, 0); };
+        settings_ = std::make_unique<SettingsWindow>(std::move(c));
+    }
+    settings_->Show();
+}
+
+static std::wstring SchedulePath() { return JoinPath(AppDataDir(), L"zeitplan.txt"); }
+
+void App::UpdateSchedule() {
+    if (!cfg_.GetBool(L"schedule", false)) return;
+    FILETIME t = LastWrite(SchedulePath());
+    if (CompareFileTime(&t, &planTime_) != 0) {
+        planTime_ = t;
+        std::string text;
+        ReadTextFile(SchedulePath(), text);
+        plan_ = ParseSchedule(text);
+        Log(L"Zeitplan: %d Einträge", (int)plan_.size());
+    }
+    std::vector<ScheduleEntry> valid;   // unbekannte Hintergründe (umbenannt, gelöscht) überspringen
+    for (auto& e : plan_)
+        if (e.id == L"none" || lib_.Find(e.id)) valid.push_back(e);
+
+    SYSTEMTIME lt;
+    GetLocalTime(&lt);
+    double debugHour = cfg_.GetFloat(L"debug_hour", -1);   // wie für iHour, zum Testen
+    int minute = debugHour >= 0 ? (int)(debugHour * 60) % 1440 : lt.wHour * 60 + lt.wMinute;
+    const ScheduleEntry* e = ActiveScheduleEntry(valid, minute);
+    if (!e) return;   // leer: alles bleibt, wie es ist
+
+    std::wstring key = std::to_wstring(e->minute) + L"|" + e->id;
+    if (key == slotKey_) return;   // gleicher Abschnitt: eigene Wahl bleibt bestehen
+    slotKey_ = key;
+    scheduled_ = e->id;
+    scheduleHeld_ = false;
+    Log(L"Zeitplan: ab %02d:%02d %s", e->minute / 60, e->minute % 60, e->id.c_str());
+    for (auto& s : screens_) ApplyId(s, e->id);
+    TrimMemory();
+}
+
+void App::EditSchedule() {
+    std::wstring path = SchedulePath();
+    if (!FileExists(path)) {
+        lib_.Scan(cfg_.GetBool(L"wallpaper_engine", true));
+        std::wstring t =
+            L"# Zeitplan: Lumen wechselt den Hintergrund nach der Uhrzeit.\r\n"
+            L"# Pro Wechsel eine Zeile:   Uhrzeit | Hintergrund\r\n"
+            L"# Der Hintergrund gilt ab dieser Uhrzeit bis zur nächsten Zeile, auch über Mitternacht hinweg.\r\n"
+            L"# Wählst du selbst einen Hintergrund, bleibt er bis zum nächsten Wechsel.\r\n"
+            L"# Zeilen mit # davor sind Kommentare. Speichern genügt, Lumen lädt die Datei sofort neu.\r\n"
+            L"# Einschalten: Menü > Einstellungen > Zeitplan.\r\n"
+            L"#\r\n"
+            L"# Beispiel (ohne # davor aktivieren):\r\n"
+            L"# 06:00 | Beispiele\\Aurora\r\n"
+            L"# 18:00 | Beispiele\\Spektrum\r\n"
+            L"#\r\n"
+            L"# Verfügbare Hintergründe (\"none\" schaltet den Live-Hintergrund aus):\r\n";
+        int n = 0;
+        for (auto& w : lib_.Items()) {
+            if (++n > 200) break;
+            t += L"#   " + w.id + L"   (" + w.name + L")\r\n";
+        }
+        WriteTextFile(path, WideToUtf8(t));
+    }
+    ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    Balloon(L"Zeitplan", cfg_.GetBool(L"schedule", false) ? L"Speichern genügt – Lumen lädt den Zeitplan sofort neu."
+                                                         : L"Der Zeitplan ist noch aus: Menü → Einstellungen → Zeitplan.");
+}
+
+const Screen* App::PropertyScreen() const {
+    for (auto& s : screens_)
+        if (s.hasWall && !s.params.empty() && !s.wp.iniPath.empty()) return &s;
+    return nullptr;
+}
+
+// Öffnet die wallpaper.ini im Editor; fehlende Werte werden mit ihrer Vorgabe eingetragen
+void App::EditProperties() {
+    const Screen* s = PropertyScreen();
+    if (!s) return;
+    std::string text;
+    ReadTextFile(s->wp.iniPath, text);
+    auto have = ParseIni(text);
+    std::wstring add;
+    for (auto& p : s->params) {
+        if (have.count(L"param." + ToLower(p.name))) continue;
+        wchar_t val[32];
+        if (p.color) swprintf(val, 32, L"#%02X%02X%02X", (int)std::lround(p.def[0] * 255), (int)std::lround(p.def[1] * 255),
+                              (int)std::lround(p.def[2] * 255));
+        else swprintf(val, 32, L"%g", p.def[0]);
+        wchar_t range[48] = L"";
+        if (!p.color) swprintf(range, 48, L" (%g bis %g)", p.mn, p.mx);
+        add += L"# " + (p.label.empty() ? p.name : p.label) + range + L"\r\nparam." + p.name + L"=" + val + L"\r\n";
+    }
+    if (!add.empty()) {
+        if (!text.empty() && text.back() != '\n') text += "\r\n";
+        text += WideToUtf8(add);
+        WriteTextFile(s->wp.iniPath, text);
+    }
+    std::wstring ini = s->wp.iniPath;
+    ShellExecuteW(nullptr, L"open", L"notepad.exe", (L"\"" + ini + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+    Balloon(L"Eigenschaften", L"Werte ändern und speichern – Lumen lädt sofort neu.");
 }
 
 void App::OpenConfig() {
@@ -1093,6 +1394,7 @@ void App::InstallCatalog(size_t idx) {
 }
 
 void App::Quit() {
+    settings_.reset();   // vor dem Grafikgerät: das Fenster hält Bilder und Texturen
     KillTimer(msgWnd_, TIMER_CHECK);
     audio_.Stop();
     if (hook_) UnhookWinEvent(hook_);
